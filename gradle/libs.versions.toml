@@ -1,0 +1,57 @@
+# Gradle version catalog. Referenced from build.gradle.kts as libs.<alias>.
+#
+# Only versions NOT managed by a BOM belong here. The Spring Boot plugin's BOM manages the
+# spring-boot-*, micrometer and h2/postgresql versions, so those aliases carry no version on
+# purpose - pinning them by hand is what reintroduces conflicts.
+
+[versions]
+springBoot = "4.1.0"
+springDependencyManagement = "1.1.7"
+lombokPlugin = "8.10"
+
+# Elide and its satellite artifacts all move together; keep them on one version.
+elide = "7.2.0"
+
+datafaker = "2.7.0"
+
+# springdoc 3.x is the Spring Boot 4 line (springdoc-openapi 3.1.1's parent is
+# spring-boot-starter-parent 4.1.0); springdoc 2.x targets Spring Boot 3.x. A 2.x version still
+# RESOLVES under Spring Boot 4 but integrates against Spring Boot 3 APIs. Do not downgrade while
+# this project is on Spring Boot 4.
+springdoc = "3.1.1"
+
+# Spring Boot's BOM does not manage rest-assured (Quarkus's does, which is why the source project
+# can omit the version).
+restAssured = "5.5.2"
+
+# Spring Boot 4.1's BOM imports the Groovy 5 platform, which upgrades rest-assured's declared
+# Groovy 4 dependency and breaks it at runtime - see the dependencyManagement block in
+# build.gradle.kts.
+groovy = "4.0.22"
+
+[libraries]
+# Brings in spring-boot-starter-web and spring-boot-starter-data-jpa transitively.
+elide-spring-boot-starter = { module = "com.yahoo.elide:elide-spring-boot-starter", version.ref = "elide" }
+# Brings in hibernate-search-mapper-orm and hibernate-search-backend-lucene transitively.
+elide-datastore-search = { module = "com.yahoo.elide:elide-datastore-search", version.ref = "elide" }
+elide-test-helpers = { module = "com.yahoo.elide:elide-test-helpers", version.ref = "elide" }
+
+# Version-less: managed by the Spring Boot BOM.
+spring-boot-starter-validation = { module = "org.springframework.boot:spring-boot-starter-validation" }
+spring-boot-starter-actuator = { module = "org.springframework.boot:spring-boot-starter-actuator" }
+spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
+micrometer-registry-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
+h2 = { module = "com.h2database:h2" }
+postgresql = { module = "org.postgresql:postgresql" }
+
+springdoc-openapi-starter-webmvc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
+datafaker = { module = "net.datafaker:datafaker", version.ref = "datafaker" }
+rest-assured = { module = "io.rest-assured:rest-assured", version.ref = "restAssured" }
+
+# No [libraries] entries for Groovy: it is never declared as a dependency, only version-pinned
+# through dependencyManagement, which reads libs.versions.groovy directly.
+
+[plugins]
+spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }
+spring-dependency-management = { id = "io.spring.dependency-management", version.ref = "springDependencyManagement" }
+lombok = { id = "io.freefair.lombok", version.ref = "lombokPlugin" }

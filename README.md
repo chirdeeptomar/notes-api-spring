@@ -21,23 +21,92 @@ preserved; see [Differences from the Quarkus original](#differences-from-the-qua
 
 ## Running
 
-The app serves on **port 8081**.
+Requires **Java 21**. The app serves on **port 8081**.
+
+### Dev mode
 
 ```bash
-# Usual way to run it locally - seeds 10 mock notes into each tenant on startup.
 ./gradlew bootRun --args='--spring.profiles.active=dev'
+```
 
-./gradlew bootRun    # no profile: starts with an EMPTY database, no seed data
-./gradlew build      # build + run all tests
+Seeds 10 mock notes into each tenant (`public`, `tenant_a`, `tenant_b`) on startup, so there is
+data to look at immediately. Uses an in-memory H2 database in PostgreSQL compatibility mode, with
+`ddl-auto=create-drop` — everything is discarded on shutdown.
+
+Then open <http://localhost:8081/> for the explorer UI.
+
+```bash
+./gradlew bootRun    # no profile: same H2 database, but EMPTY - no seed data
 ```
 
 The seeder (`MockNoteSeeder`) is `@Profile("dev")`, mirroring the Quarkus original's
 `@IfBuildProfile("dev")`, so **plain `bootRun` gives you an empty database**. Pass the `dev`
-profile whenever you want data to look at.
+profile whenever you want data.
 
-Requires **Java 21**. The build pins a Java 21 toolchain and `org.gradle.java.home`, because
-Gradle 8.14's bundled Kotlin compiler cannot parse a Java 25 version string. If you do not have a
-JDK at the path in `gradle.properties`, point `org.gradle.java.home` at your own Java 21.
+### Prod mode
+
+The `prod` profile (`application-prod.properties`) switches to PostgreSQL and turns schema
+management off — `ddl-auto=none`, so the database schema must already exist.
+
+```bash
+export DB_URL=jdbc:postgresql://localhost:5432/notes   # optional, this is the default
+export DB_USER=notes                                   # optional, this is the default
+export DB_PASSWORD=<required, no default>
+
+./gradlew bootRun --args='--spring.profiles.active=prod'
+```
+
+Or from a packaged jar:
+
+```bash
+./gradlew bootJar
+java -jar build/libs/notes-api-spring-1.0.0-SNAPSHOT.jar --spring.profiles.active=prod
+```
+
+`DB_PASSWORD` has no default and startup fails without it. Note that `MockNoteSeeder` does not run
+under `prod`, and that each tenant's schema plus its `note` table must exist —
+`TenantSchemaInitializer` still runs and issues `CREATE SCHEMA IF NOT EXISTS`, but the DB user
+needs rights to do so.
+
+### Docker
+
+```bash
+./gradlew bootJar
+docker build -f src/main/docker/Dockerfile.jvm -t notes-api-spring .
+docker run -p 8081:8081 -e DB_PASSWORD=secret notes-api-spring
+```
+
+A JVM image only; the Quarkus project's native-image variants have no equivalent here.
+
+## Build and test
+
+```bash
+./gradlew build     # compile + run the full test suite (73 tests)
+./gradlew test      # tests only
+./gradlew bootJar   # executable jar
+```
+
+Dependency versions live in `gradle/libs.versions.toml` (a Gradle version catalog), referenced
+from `build.gradle.kts` as `libs.*`. Only versions **not** managed by a BOM are pinned there; the
+Spring Boot BOM manages the rest, and hand-pinning those is what reintroduces conflicts. The
+catalog carries the reasoning for each non-obvious pin.
+
+If Gradle fails with `IllegalArgumentException: 25`, your shell's JDK is too new for Gradle 8.14's
+Kotlin compiler. The build pins a Java 21 toolchain and `org.gradle.java.home` for this reason; if
+you do not have a JDK at the path in `gradle.properties`, point it at your own Java 21.
+
+### Tests
+
+73 tests, no skips. Beyond ordinary CRUD coverage, several exist to pin down behaviour that
+previously broke silently and would otherwise regress unnoticed:
+
+| Test | Guards |
+|---|---|
+| `AsyncTenantPropagationTest` | the tenant survives Spring MVC's async boundary (see below) |
+| `OpenInViewDisabledIsolationTest` | tenant isolation does not depend on `open-in-view` |
+| `TenantSchemaTest` | tenant tables match Hibernate's entity-derived table, column for column |
+| `SearchTest` | search is Lucene-served, and does not leak across tenants |
+| `ApiDocsTest` | the hand-written controllers are documented, and the UI loads the right document |
 
 ## Multi-tenancy
 
@@ -104,6 +173,71 @@ plain JPA store instead.
 Tests use an in-memory Lucene directory (`local-heap`, set in `tasks.test`) because several
 `@SpringBootTest` contexts in one JVM would otherwise contend for the same `write.lock`.
 
+## API usage
+
+### JSON:API
+
+```bash
+curl localhost:8081/api/v1/notes
+
+curl -X POST localhost:8081/api/v1/notes \
+  -H 'Content-Type: application/vnd.api+json' \
+  -d '{"data":{"type":"notes","attributes":{"body":"hello","email":"a@example.com"}}}'
+```
+
+### GraphQL
+
+`POST /graphql/api/v1`. Add `X-API-KEY` to query a non-public tenant (in GraphiQL, use the
+**Headers** tab).
+
+```bash
+curl -X POST localhost:8081/graphql/api/v1 \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"{ notes { edges { node { id body email } } } }"}'
+```
+
+Mutations use Elide's `UPSERT` / `DELETE` operations:
+
+```bash
+curl -X POST localhost:8081/graphql/api/v1 \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"mutation { notes(op: UPSERT, data: {body: \"new\", email: \"a@example.com\"}) { edges { node { id } } } }"}'
+```
+
+### Validation
+
+`Note.body` and `Note.email` carry Jakarta Bean Validation constraints, enforced on create and
+update: `body` not blank and at most 2000 characters, `email` not blank and well-formed. A
+violation is rejected with `400` and a JSON:API error body naming the offending attribute.
+
+These constraints also shape the DDL — `@Size(max = 2000)` becomes `varchar(2000)` — which is why
+`TenantSchemaInitializer`'s hand-written table has to match, and why `TenantSchemaTest` compares
+the two.
+
+### Lifecycle hooks
+
+`Note` carries sample Elide hooks demonstrating each transaction phase, recorded in-memory by
+`HookInvocationRecorder`:
+
+| Hook | Phase | Notes |
+|---|---|---|
+| `NoteNormalizePreSecurityHook` | PRESECURITY | normalizes before security checks and validation run |
+| `NoteAuditPreCommitHook` | PRECOMMIT | `oncePerRequest = false`, so it fires per changed field with a populated `ChangeSpec` |
+| `NotePostCommitHook` | POSTCOMMIT | left at the default, so one note produces exactly one event |
+
+### Uploads
+
+`POST /api/v1/uploads`, `multipart/form-data`, form field `file`:
+
+```bash
+curl -F "file=@notes.csv" localhost:8081/api/v1/uploads
+```
+
+Any content type is accepted. What happens to the bytes is decided by the `UploadHandler` beans on
+the classpath; a file no handler claims is accepted, measured and reported as unhandled rather than
+rejected. Supporting a format means adding a `@Component` implementing `UploadHandler` — no change
+to the controller. None ships with the app, so by default every upload is reported as unhandled.
+
 ## Differences from the Quarkus original
 
 | | Quarkus | Spring |
@@ -112,11 +246,24 @@ Tests use an in-memory Lucene directory (`local-heap`, set in `tasks.test`) beca
 | Port | 8080 | **8081** |
 | Raw OpenAPI scan | `/q/openapi` | `/v3/api-docs` |
 
-Roughly 300 lines of hand-wired Quarkus code are gone: `AnalyticsDataStoreProducer`,
-`RuntimeClassLoaderClassScanner`, its classpath-extraction workaround, `ScannedResourcePaths` and
-`ElideSetting`. Elide's Spring autoconfiguration supplies the aggregation store, the controllers and
-the OpenAPI document, and springdoc and Elide share one `io.swagger.v3` object model, so the JSON
-round-trip the Quarkus version needed to bridge two OpenAPI models is unnecessary.
+Four classes disappear (~576 lines): `AnalyticsDataStoreProducer`,
+`RuntimeClassLoaderClassScanner`, `ScannedResourcePaths` and `ElideSetting`. Elide's Spring
+autoconfiguration supplies the aggregation store and the controllers, and springdoc and Elide share
+one `io.swagger.v3` object model, so the JSON round-trip the Quarkus version needed to bridge two
+OpenAPI models is unnecessary.
+
+**But the work moved rather than vanished.** Spring needs ~460 lines Quarkus did not:
+`TenantAsyncConfiguration`, `SchemaMultiTenantConnectionProvider`, `AnalyticsQueryEngineConfiguration`
+and `ElideStoreConfiguration`. Comment-stripped, the two projects are within a few percent of each
+other — 663 lines for Quarkus against 626 for Spring.
+
+The difference that matters is in kind, not volume. Quarkus's extra code is ceremony: wiring stores
+its extension did not autoconfigure, bridging two OpenAPI models. Shallow and local. Spring's extra
+code is subtle: the `Callable` async boundary silently voided tenant isolation, a pooled connection
+needed its schema reset to avoid serving the next borrower another tenant's data, and the analytics
+`DataSource` could not be a bean at all without breaking unrelated injection points. Each was a
+potential cross-tenant leak that passed its tests before being caught. If you are weighing the two
+frameworks for an application shaped like this one, that is the honest trade.
 
 ## Analytics
 
