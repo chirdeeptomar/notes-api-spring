@@ -20,11 +20,14 @@ val dataFakerVersion = "2.7.0"
 val restAssuredVersion = "5.5.2"
 
 dependencies {
+    // Brings in spring-boot-starter-web and spring-boot-starter-data-jpa transitively, so
+    // neither is declared here.
     implementation("com.yahoo.elide:elide-spring-boot-starter:$elideVersion")
+    // Brings in hibernate-search-mapper-orm and hibernate-search-backend-lucene transitively.
     implementation("com.yahoo.elide:elide-datastore-search:$elideVersion")
 
-    implementation("org.springframework.boot:spring-boot-starter-web")
-    implementation("org.springframework.boot:spring-boot-starter-data-jpa")
+    // Declared explicitly although also reachable transitively: Note.java compiles against
+    // jakarta.validation annotations directly, so it should not depend on a transitive path.
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("io.micrometer:micrometer-registry-prometheus")
@@ -34,8 +37,6 @@ dependencies {
     // APIs. Do not downgrade while this project is on Spring Boot 4.
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
 
-    implementation("org.hibernate.search:hibernate-search-mapper-orm")
-    implementation("org.hibernate.search:hibernate-search-backend-lucene")
 
     implementation("net.datafaker:datafaker:$dataFakerVersion")
 
