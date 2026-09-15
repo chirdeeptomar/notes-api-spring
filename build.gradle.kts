@@ -80,9 +80,10 @@ tasks.withType<JavaCompile> {
 
 tasks.test {
     useJUnitPlatform()
-    // Activates src/test/resources/application-test.properties, which layers over the main
-    // application.properties (a plain test-scope application.properties would shadow it).
-    systemProperty("spring.profiles.active", "test")
+    // Set directly rather than via a Spring profile: a test class annotated @ActiveProfiles would
+    // replace spring.profiles.active and silently drop this, reintroducing the Lucene write.lock
+    // contention between @SpringBootTest contexts. A system property survives regardless of profiles.
+    systemProperty("spring.jpa.properties.hibernate.search.backend.directory.type", "local-heap")
     // Elide's analytics MetaDataStore does a full ClassGraph classpath scan at startup to find
     // @Subselect-annotated classes, which needs more heap than Gradle's default test worker.
     maxHeapSize = "1536m"

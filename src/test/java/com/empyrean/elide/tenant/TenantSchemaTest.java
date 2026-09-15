@@ -9,10 +9,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -130,5 +133,48 @@ class TenantSchemaTest {
         } finally {
             em.close();
         }
+    }
+
+    /**
+     * {@link TenantSchemaInitializer} hand-writes the {@code note} DDL for every key-protected
+     * tenant schema instead of letting Hibernate generate it, because Hibernate's {@code
+     * ddl-auto} only runs against the default {@code public} schema (see that class's javadoc).
+     * Nothing enforces that the hand-written copy actually matches what Hibernate generated for
+     * {@code public} - they are two independent sources of truth for the same table shape, and
+     * they have drifted before ({@code body}/{@code email} were {@code varchar(255)} nullable
+     * in the tenant schemas vs. Hibernate's Bean-Validation-derived {@code varchar(2000) NOT
+     * NULL}). This test compares the actual {@code information_schema.columns} rows so any
+     * future drift fails loudly instead of only surfacing as a value-too-long error on whichever
+     * tenant happens to receive a long note body first.
+     */
+    @Test
+    void tenantTablesMatchTheEntityDerivedPublicTable() throws Exception {
+        Map<String, String> expected = columnsOf("public");
+        assertThat(expected).isNotEmpty();
+        for (String tenant : tenantInfo.getTenants()) {
+            assertThat(columnsOf(tenant))
+                    .as("tenant %s note table must match the entity-derived public table", tenant)
+                    .isEqualTo(expected);
+        }
+    }
+
+    private Map<String, String> columnsOf(String schema) throws Exception {
+        Map<String, String> columns = new TreeMap<>();
+        try (Connection c = dataSource.getConnection();
+             PreparedStatement ps = c.prepareStatement("""
+                     SELECT column_name, data_type, character_maximum_length, is_nullable
+                     FROM information_schema.columns
+                     WHERE UPPER(table_schema) = UPPER(?) AND UPPER(table_name) = 'NOTE'
+                     """)) {
+            ps.setString(1, schema);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    columns.put(rs.getString("column_name").toUpperCase(),
+                            rs.getString("data_type") + "|" + rs.getString("character_maximum_length")
+                                    + "|" + rs.getString("is_nullable"));
+                }
+            }
+        }
+        return columns;
     }
 }

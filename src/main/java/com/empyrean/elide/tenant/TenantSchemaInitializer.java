@@ -27,6 +27,17 @@ import java.sql.Statement;
  * Using a different identifier here would leave the tenant schemas structurally different from
  * the default schema Hibernate provisions itself, which would break routed reads/writes for
  * those tenants even though this initializer "succeeded".
+ * <p>
+ * <b>Maintainers:</b> re-check this DDL against Hibernate's generated {@code public.note} table
+ * whenever fields are ADDED to {@link com.empyrean.elide.model.Note}, and also whenever
+ * {@code Note}'s VALIDATION ANNOTATIONS change ({@code @Size}, {@code @NotBlank},
+ * {@code @NotNull}). {@code spring-boot-starter-validation} makes Hibernate's Bean Validation
+ * DDL integration feed those annotations into column type and nullability (e.g. {@code @Size}
+ * sets {@code varchar} length, {@code @NotBlank}/{@code @NotNull} sets {@code NOT NULL}), so a
+ * validation-only change to the entity can silently desync this hand-written DDL from what
+ * Hibernate actually generates for {@code public}, exactly as happened when this class's
+ * {@code body}/{@code email} columns were first written without matching
+ * {@code varchar(2000) NOT NULL} / {@code NOT NULL}.
  */
 @Component
 @Order(1)
@@ -64,8 +75,8 @@ public class TenantSchemaInitializer implements ApplicationRunner {
         return """
                 CREATE TABLE IF NOT EXISTS "%s".note (
                     id uuid NOT NULL,
-                    body varchar(255),
-                    email varchar(255),
+                    body varchar(2000) NOT NULL,
+                    email varchar(255) NOT NULL,
                     created_date timestamp(6),
                     PRIMARY KEY (id)
                 )

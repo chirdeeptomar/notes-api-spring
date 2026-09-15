@@ -4,6 +4,3 @@ bin/
 *.class
 lucene-indexes/
 .DS_Store
-
-# Hibernate Search (elide-datastore-search) local Lucene index, created at the working
-# directory root using the entity's simple name when no backend directory root is configured.

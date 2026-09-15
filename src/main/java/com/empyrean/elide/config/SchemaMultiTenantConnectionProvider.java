@@ -30,10 +30,12 @@ import java.sql.SQLException;
 public class SchemaMultiTenantConnectionProvider implements MultiTenantConnectionProvider<String> {
 
     private final DataSource dataSource;
+    private final TenantInfo tenantInfo;
     private final String defaultSchema;
 
     public SchemaMultiTenantConnectionProvider(DataSource dataSource, TenantInfo tenantInfo) {
         this.dataSource = dataSource;
+        this.tenantInfo = tenantInfo;
         this.defaultSchema = tenantInfo.getDefaultTenant();
     }
 
@@ -53,6 +55,14 @@ public class SchemaMultiTenantConnectionProvider implements MultiTenantConnectio
 
     @Override
     public Connection getConnection(String tenantIdentifier) throws SQLException {
+        // This class is the single chokepoint where a tenant identifier is turned into an actual
+        // schema routing decision, and the HTTP filter that will feed it a request-derived
+        // identifier hasn't been written yet. Rejecting anything outside the known set here
+        // converts a future resolver/filter bug into a hard failure instead of a silent
+        // fall-through to whatever arbitrary schema string happened to be passed in.
+        if (!defaultSchema.equals(tenantIdentifier) && !tenantInfo.getTenants().contains(tenantIdentifier)) {
+            throw new SQLException("Unknown tenant: " + tenantIdentifier);
+        }
         Connection connection = dataSource.getConnection();
         connection.setSchema(tenantIdentifier);
         return connection;
@@ -60,9 +70,15 @@ public class SchemaMultiTenantConnectionProvider implements MultiTenantConnectio
 
     @Override
     public void releaseConnection(String tenantIdentifier, Connection connection) throws SQLException {
-        // Reset before returning to the Hikari pool - see class javadoc.
-        connection.setSchema(defaultSchema);
-        connection.close();
+        // Reset before returning to the Hikari pool - see class javadoc. Wrapped in try/finally
+        // so a failure in setSchema still returns the connection to the pool instead of leaking
+        // it; a leaked connection here would otherwise never come back to Hikari, and repeated
+        // occurrences would exhaust the pool.
+        try {
+            connection.setSchema(defaultSchema);
+        } finally {
+            connection.close();
+        }
     }
 
     @Override
