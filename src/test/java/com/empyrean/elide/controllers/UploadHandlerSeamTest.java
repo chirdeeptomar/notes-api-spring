@@ -1,4 +1,4 @@
-package com.empyrean.elide.upload;
+package com.empyrean.elide.controllers;
 
 import io.restassured.RestAssured;
 import org.junit.jupiter.api.BeforeEach;
@@ -7,6 +7,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
+
+import com.empyrean.elide.controllers.handlers.UploadHandler;
+import com.empyrean.elide.controllers.responses.UploadResult;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -17,7 +20,8 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 
 /**
- * Verifies the {@link UploadHandler} seam: adding a handler bean is enough to change how an
+ * Verifies the {@link UploadHandler} seam: adding a handler bean is enough to
+ * change how an
  * upload is processed, with no change to {@link UploadController}.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -71,7 +75,7 @@ class UploadHandlerSeamTest {
     @Test
     void unmatchedContentTypeStillFallsThroughToUnhandled() {
         given()
-                .multiPart("file", "data.bin", new byte[] {1, 2, 3}, "application/octet-stream")
+                .multiPart("file", "data.bin", new byte[] { 1, 2, 3 }, "application/octet-stream")
                 .post("/api/v1/uploads")
                 .then()
                 .statusCode(200)
