@@ -51,6 +51,20 @@ class ApiDocsTest {
                 .body("paths.'/api/v1/uploads'", notNullValue());
     }
 
+    /**
+     * The explorer UI is only as good as the document it loads. Elide's {@code /api-docs} holds
+     * only its own entity paths, so a Swagger UI pointed there silently omits every hand-written
+     * controller - which is exactly what happened before this was caught.
+     */
+    @Test
+    void swaggerUiLoadsTheDocumentThatContainsEverything() {
+        given()
+                .get("/swagger/swagger-initializer.js")
+                .then()
+                .statusCode(200)
+                .body(org.hamcrest.Matchers.containsString("/v3/api-docs"));
+    }
+
     @Test
     void springdocDocumentAlsoContainsElideEntityPaths() {
         given()
