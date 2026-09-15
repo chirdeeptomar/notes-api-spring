@@ -113,6 +113,39 @@ class SearchTest {
                 .body("data.attributes.body", not(hasItem(body)));
     }
 
+    /**
+     * Regression guard for {@code ElideStoreConfiguration#defaultFilterDialectCustomizer}: it
+     * appends {@link com.yahoo.elide.core.filter.dialect.jsonapi.DefaultFilterDialect} after the
+     * autoconfigured {@code RSQLFilterDialect} rather than replacing it, specifically so that
+     * RSQL-syntax filtering - {@code filter[notes]=email=='...'}, which only
+     * {@code RSQLFilterDialect} parses - keeps working. Nothing else in this suite or the
+     * read-only source project exercises RSQL syntax, so without this test a future change that
+     * reordered the dialect list or replaced rather than appended {@code DefaultFilterDialect}
+     * would go uncaught.
+     * <p>
+     * Confirmed to genuinely exercise the RSQL path (not just something both dialects happen to
+     * accept): temporarily removing {@code .joinFilterDialect(RSQLFilterDialect...)} from the
+     * autoconfigured builder made this test fail with 400
+     * {@code "Invalid query parameter: filter[notes]"} - see {@code task-6-report.md} for the
+     * verbatim before/after. {@link DefaultFilterDialect} has no concept of an operator embedded
+     * in a type-scoped filter value, so {@code email=='...'} as the value of {@code filter[notes]}
+     * is RSQL-only syntax, not something that also happens to parse under the bracket-operator
+     * dialect.
+     */
+    @Test
+    void rsqlSyntaxStillFiltersNotes() {
+        String matchingEmail = "rsql-" + UUID.randomUUID() + "@example.com";
+        String nonMatchingEmail = "rsql-" + UUID.randomUUID() + "@example.com";
+        String matchingBody = "note for rsql smoke test " + matchingEmail;
+        String nonMatchingBody = "note for rsql smoke test " + nonMatchingEmail;
+        createNoteWithEmail(null, matchingBody, matchingEmail);
+        createNoteWithEmail(null, nonMatchingBody, nonMatchingEmail);
+
+        searchRsql(null, "email=='" + matchingEmail + "'")
+                .body("data.attributes.email", hasItem(matchingEmail))
+                .body("data.attributes.email", not(hasItem(nonMatchingEmail)));
+    }
+
     /** A 5-character word, within elide-datastore-search's default 3-5 character n-gram bounds. */
     private String randomWord() {
         return "w" + UUID.randomUUID().toString().replace("-", "").substring(0, 4);
@@ -137,13 +170,26 @@ class SearchTest {
                 .statusCode(200);
     }
 
+    /** RSQL-syntax type filter, e.g. {@code rsqlExpression = "email=='foo@example.com'"}. */
+    private ValidatableResponse searchRsql(String apiKey, String rsqlExpression) {
+        return withApiKey(given(), apiKey)
+                .accept(JSON_API)
+                .get(NOTES_PATH + "?filter[notes]=" + rsqlExpression)
+                .then()
+                .statusCode(200);
+    }
+
     private void createNote(String apiKey, String body) {
+        createNoteWithEmail(apiKey, body, "test@example.com");
+    }
+
+    private void createNoteWithEmail(String apiKey, String body, String email) {
         withApiKey(given(), apiKey)
                 .contentType(JSON_API)
                 .accept(JSON_API)
                 .body("""
-                        {"data":{"type":"notes","attributes":{"body":"%s","email":"test@example.com"}}}
-                        """.formatted(body))
+                        {"data":{"type":"notes","attributes":{"body":"%s","email":"%s"}}}
+                        """.formatted(body, email))
                 .post(NOTES_PATH)
                 .then()
                 .statusCode(201);
