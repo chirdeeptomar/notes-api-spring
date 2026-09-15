@@ -28,7 +28,11 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("io.micrometer:micrometer-registry-prometheus")
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.7.0")
+    // springdoc 3.x is the Spring Boot 4 line (springdoc-openapi 3.1.1's parent is
+    // spring-boot-starter-parent 4.1.0); springdoc 2.x targets Spring Boot 3.x. A 2.x
+    // version still RESOLVES under Spring Boot 4 but integrates against Spring Boot 3
+    // APIs. Do not downgrade while this project is on Spring Boot 4.
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
 
     implementation("org.hibernate.search:hibernate-search-mapper-orm")
     implementation("org.hibernate.search:hibernate-search-backend-lucene")
