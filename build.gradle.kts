@@ -80,6 +80,9 @@ tasks.withType<JavaCompile> {
 
 tasks.test {
     useJUnitPlatform()
+    // Activates src/test/resources/application-test.properties, which layers over the main
+    // application.properties (a plain test-scope application.properties would shadow it).
+    systemProperty("spring.profiles.active", "test")
     // Elide's analytics MetaDataStore does a full ClassGraph classpath scan at startup to find
     // @Subselect-annotated classes, which needs more heap than Gradle's default test worker.
     maxHeapSize = "1536m"

@@ -22,16 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link RequestTenantResolver} resolves the right identifier, and - the part neither of those
  * facts implies on its own - that Hibernate actually routes reads and writes to the schema
  * named by {@link TenantContext} rather than silently funnelling every tenant into one schema.
- * <p>
- * {@code hibernate.search.backend.directory.type=local-heap} scopes this test's Lucene index to
- * memory instead of the project-root {@code ./Note} filesystem directory that the default
- * (unset) production configuration uses. Without it, this class's {@code @SpringBootTest}
- * context and {@code NoteRestCrudTest}'s each try to lock that same fixed path, and whichever
- * boots second fails with a Lucene {@code LockObtainFailedException} - a pre-existing gap in
- * the app's Hibernate Search test configuration that this class is the first to expose, since
- * it is the first second distinct {@code @SpringBootTest} context shape in the suite.
  */
-@SpringBootTest(properties = "spring.jpa.properties.hibernate.search.backend.directory.type=local-heap")
+@SpringBootTest
 class TenantSchemaTest {
 
     @Autowired
