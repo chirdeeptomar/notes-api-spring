@@ -42,7 +42,7 @@ public class TenantInfo {
      * @return the names of every configured, key-protected tenant (excludes the default tenant)
      */
     public Set<String> getTenants() {
-        return tenant.keySet();
+        return Collections.unmodifiableSet(tenant.keySet());
     }
 
     /**
