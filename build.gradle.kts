@@ -28,7 +28,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("io.micrometer:micrometer-registry-prometheus")
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.7.0")
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
 
     implementation("org.hibernate.search:hibernate-search-mapper-orm")
     implementation("org.hibernate.search:hibernate-search-backend-lucene")
@@ -41,6 +41,21 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("io.rest-assured:rest-assured:$restAssuredVersion")
     testImplementation("com.yahoo.elide:elide-test-helpers:$elideVersion")
+}
+
+// Spring Boot 4.1's dependency-management BOM imports the Groovy 5 platform (groovy-bom
+// 5.0.6), which upgrades rest-assured 5.5.2's declared Groovy 4.0.22 dependency and breaks it
+// at runtime: rest-assured's Groovy-based HTTPBuilder throws a NullPointerException out of
+// ClosureMetaClass on the very first request under Groovy 5. A plain Gradle resolutionStrategy
+// force() is not enough to win against an imported BOM's constraints, so override the managed
+// version through the dependency-management plugin itself, back to the Groovy line rest-assured
+// actually declares and was tested against.
+dependencyManagement {
+    dependencies {
+        dependency("org.apache.groovy:groovy:4.0.22")
+        dependency("org.apache.groovy:groovy-xml:4.0.22")
+        dependency("org.apache.groovy:groovy-json:4.0.22")
+    }
 }
 
 java {
