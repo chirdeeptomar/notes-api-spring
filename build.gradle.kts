@@ -44,8 +44,14 @@ dependencies {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    // A toolchain (not just source/target compatibility) is required because this machine's
+    // default JDK (25) is newer than Gradle 8.14's bundled Kotlin compiler supports for parsing
+    // build.gradle.kts — sourceCompatibility/targetCompatibility only govern bytecode level for
+    // our own sources, not which JVM Gradle itself runs on. The toolchain makes Gradle select
+    // Java 21 to run the build regardless of ambient JAVA_HOME.
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
 }
 
 tasks.withType<JavaCompile> {
