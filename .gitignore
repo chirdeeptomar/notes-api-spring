@@ -1,0 +1,6 @@
+build/
+.gradle/
+bin/
+*.class
+lucene-indexes/
+.DS_Store
