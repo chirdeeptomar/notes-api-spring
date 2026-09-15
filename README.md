@@ -23,10 +23,16 @@ preserved; see [Differences from the Quarkus original](#differences-from-the-qua
 The app serves on **port 8081**.
 
 ```bash
-./gradlew bootRun                                      # default profile
-./gradlew bootRun --args='--spring.profiles.active=dev' # dev: seeds 10 mock notes per tenant
-./gradlew build                                        # build + run all tests
+# Usual way to run it locally - seeds 10 mock notes into each tenant on startup.
+./gradlew bootRun --args='--spring.profiles.active=dev'
+
+./gradlew bootRun    # no profile: starts with an EMPTY database, no seed data
+./gradlew build      # build + run all tests
 ```
+
+The seeder (`MockNoteSeeder`) is `@Profile("dev")`, mirroring the Quarkus original's
+`@IfBuildProfile("dev")`, so **plain `bootRun` gives you an empty database**. Pass the `dev`
+profile whenever you want data to look at.
 
 Requires **Java 21**. The build pins a Java 21 toolchain and `org.gradle.java.home`, because
 Gradle 8.14's bundled Kotlin compiler cannot parse a Java 25 version string. If you do not have a
