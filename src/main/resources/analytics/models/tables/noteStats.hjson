@@ -1,0 +1,31 @@
+{
+  tables: [
+    {
+      name: noteStats
+      table: note
+      friendlyName: Note Stats
+      description: Note counts grouped by author email
+      // dbConnectionName intentionally omitted: resolves to the query engine's default
+      // connection, whose schema is set per-request to the current tenant
+      // (see com.empyrean.elide.datastore.TenantAwareDataSource).
+
+      measures: [
+        {
+          name: count
+          type: INTEGER
+          definition: "COUNT({{$id}})"
+          friendlyName: Note Count
+        }
+      ]
+
+      dimensions: [
+        {
+          name: email
+          type: TEXT
+          definition: "{{$email}}"
+          friendlyName: Email
+        }
+      ]
+    }
+  ]
+}

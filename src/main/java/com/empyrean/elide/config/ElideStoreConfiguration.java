@@ -1,18 +1,19 @@
 package com.empyrean.elide.config;
 
+import com.empyrean.elide.datastore.TenantAwareDataSource;
+import com.empyrean.elide.tenant.TenantInfo;
 import com.yahoo.elide.core.datastore.DataStore;
-import com.yahoo.elide.core.dictionary.EntityDictionary;
-import com.yahoo.elide.core.filter.dialect.jsonapi.DefaultFilterDialect;
 import com.yahoo.elide.datastores.jpa.JpaDataStore;
 import com.yahoo.elide.datastores.search.SearchDataStore;
-import com.yahoo.elide.jsonapi.JsonApiSettingsBuilderCustomizer;
 import com.yahoo.elide.spring.config.ElideAutoConfiguration;
 import com.yahoo.elide.spring.datastore.config.DataStoreBuilderCustomizer;
 import jakarta.persistence.EntityManagerFactory;
+import org.springframework.beans.factory.BeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 
+import javax.sql.DataSource;
 import java.util.ListIterator;
 
 /**
@@ -55,27 +56,53 @@ import java.util.ListIterator;
  * write in this process (e.g. those from {@code MockNoteSeeder}) are searchable immediately
  * rather than only after they are next updated.
  * <p>
- * <b>A second, independent gap this class also closes:</b> {@code infix}/{@code prefix}
- * filters use JSON:API's bracket-operator query syntax
- * ({@code filter[notes.body][infix]=term}), which only {@link DefaultFilterDialect} parses.
- * {@code elide-spring-boot-autoconfigure} 7.2.0's {@code ElideAutoConfiguration.JsonApiConfiguration
- * .jsonApiSettingsBuilder(...)} (confirmed by decompiling the class) registers only an
- * {@code RSQLFilterDialect} as both the join and subquery filter dialect and never adds
- * {@code DefaultFilterDialect}. Per {@code JsonApiRequestScope}'s constructor (decompiled from
- * {@code elide-core}), {@code DefaultFilterDialect} is added automatically only as a *fallback*
- * when {@code JsonApiSettings.getJoinFilterDialects()}/{@code getSubqueryFilterDialects()} is
- * empty - since the autoconfigured RSQL dialect makes that list non-empty, the fallback never
- * runs and every bracket-operator query param (not just {@code infix}/{@code prefix} - any use
- * of that syntax) fails before reaching any data store, with
- * {@code "Invalid query parameter: filter[...]"}. This reproduces with plain
- * {@code filter[notes.email]=x} even with no {@link SearchDataStore} involved, so it is a
- * pre-existing gap in the autoconfiguration, not something introduced by the search wiring
- * above - but Task 6 is what first exercises bracket-operator syntax, so it is fixed here.
- * The {@link JsonApiSettingsBuilderCustomizer} seam runs last inside
- * {@code jsonApiSettingsBuilder(...)} (again via {@code ObjectProvider#orderedStream()}), after
- * RSQL is already registered, and {@code joinFilterDialect(single)}/
- * {@code subqueryFilterDialect(single)} append rather than replace - so this customizer adds
- * {@link DefaultFilterDialect} alongside RSQL rather than needing to remove or reorder it.
+ * <b>Task 7 addition - {@code defaultDataSource}:</b> {@code elide-spring-boot-autoconfigure}'s
+ * {@code ElideAutoConfiguration.AggregationStoreConfiguration.queryEngine(...)} bean method
+ * (confirmed by decompiling the class with {@code javap}) takes a plain {@code javax.sql.DataSource}
+ * as its first parameter, with no {@code @Qualifier} - its {@code MethodParameters} attribute
+ * names that parameter {@code defaultDataSource}. It builds its own internal
+ * {@code ConnectionDetails} around whatever bean resolves there; there is no seam to supply a
+ * {@code ConnectionDetails} bean directly; that possibility (sketched in the task brief) does not
+ * exist in the real bytecode. Registering a {@code DataSource} bean named {@code defaultDataSource}
+ * routes exactly that parameter to {@link TenantAwareDataSource} (Spring resolves a same-typed,
+ * unqualified factory-method parameter by matching the parameter's own name against candidate bean
+ * names first).
+ * <p>
+ * <b>Why {@code defaultDataSource} needs both {@code autowireCandidate = false} and a deferred,
+ * by-name lookup instead of a {@code DataSource} constructor/method parameter:</b> a second
+ * {@code DataSource}-typed bean in the context makes every <em>other</em> unqualified
+ * {@code DataSource} injection point ambiguous by type, including ones this class cannot annotate
+ * (e.g. {@code DataSourceInitializationAutoConfiguration.dataSourceScriptDatabaseInitializer} and
+ * {@code JpaBaseConfiguration}'s {@code entityManagerFactory} bean, both autoconfigured with an
+ * unqualified {@code DataSource dataSource} parameter). Two problems, found empirically, needed
+ * two separate fixes:
+ * <ol>
+ * <li>If this bean method itself took a {@code DataSource} parameter (even named
+ * {@code dataSource}, matching the raw bean by name), Spring could ask it to resolve that
+ * parameter while <em>this very bean</em> was still under construction, throwing
+ * {@code BeanCurrentlyInCreationException} - so it instead takes the always-unambiguous
+ * {@link BeanFactory} and defers the by-name lookup of the raw {@code "dataSource"} bean to
+ * {@link TenantAwareDataSource}'s first actual use (see its javadoc), well after context refresh
+ * completes and no bean is "currently in creation".</li>
+ * <li>That alone was not enough: with two ambiguous {@code DataSource} candidates in the context,
+ * {@code entityManagerFactory} started resolving to this bean instead of the raw one - Hibernate's
+ * own JPA bootstrap then failed to determine its SQL dialect, since the tenant-aware wrapper needs
+ * a live {@code TenantContext} that does not exist yet during EMF creation. Marking the
+ * autoconfigured {@code dataSource} bean definition {@code @Primary} via a
+ * {@code BeanFactoryPostProcessor}/{@code BeanDefinitionRegistryPostProcessor} does not fix this:
+ * {@code DataSourceAutoConfiguration}'s bean definition is registered late enough (behind a
+ * deferred {@code @EnableAutoConfiguration} import, further affected by Spring Cloud Context's
+ * {@code GenericScope} machinery this app pulls in) that consumers can already be resolving
+ * {@code DataSource} before any first-party postprocessor observes the {@code dataSource}
+ * definition at all - confirmed by instrumenting both postprocessor callbacks, neither of which ran
+ * before the failure. {@code @Bean(autowireCandidate = false)} instead removes this bean from
+ * candidacy for every unqualified, by-type injection point outright, while leaving it fully
+ * resolvable by the explicit name match Elide's own {@code queryEngine(...)} uses (see above) -
+ * this is the actual fix.</li>
+ * </ol>
+ * See {@code SchemaMultiTenantConnectionProvider} and {@code TenantSchemaInitializer} (both
+ * constructor-injected, eagerly, with a plain {@code DataSource dataSource} parameter) for the
+ * pre-existing, single-candidate-by-type injections that stay unaffected throughout.
  */
 @Configuration
 public class ElideStoreConfiguration {
@@ -87,16 +114,16 @@ public class ElideStoreConfiguration {
     }
 
     /**
-     * Adds {@link DefaultFilterDialect} - the bracket-operator ({@code filter[type.field][op]=value})
-     * JSON:API filter syntax that {@code infix}/{@code prefix} require - alongside the
-     * RSQL dialect {@code elide-spring-boot-autoconfigure} registers by default. See the class
-     * Javadoc for why this is otherwise silently missing.
+     * Scopes the aggregation store's JDBC connections to the requesting tenant's schema. See the
+     * class javadoc's "Task 7 addition" and "Why defaultDataSource needs both autowireCandidate =
+     * false and a deferred, by-name lookup" sections for why this bean must be named
+     * {@code defaultDataSource}, why it is not an autowire candidate, and why it resolves the raw
+     * pooled {@code DataSource} lazily, by name, through {@link BeanFactory} rather than taking
+     * one as a constructor/method parameter.
      */
-    @Bean
-    public JsonApiSettingsBuilderCustomizer defaultFilterDialectCustomizer(EntityDictionary dictionary) {
-        return builder -> builder
-                .joinFilterDialect(new DefaultFilterDialect(dictionary))
-                .subqueryFilterDialect(new DefaultFilterDialect(dictionary));
+    @Bean(name = "defaultDataSource", autowireCandidate = false)
+    public DataSource tenantAwareDataSource(BeanFactory beanFactory, TenantInfo tenantInfo) {
+        return new TenantAwareDataSource(beanFactory, tenantInfo);
     }
 
     private void replaceJpaStoresWithSearchStores(java.util.List<DataStore> dataStores,
