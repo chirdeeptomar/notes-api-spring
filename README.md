@@ -13,7 +13,7 @@ preserved; see [Differences from the Quarkus original](#differences-from-the-qua
 - **API docs**: `/api-docs` (Elide's entity paths) and `/v3/api-docs` (springdoc: entity paths **plus**
   every hand-written `@RestController`)
 - **Metrics**: `/actuator/prometheus`
-- **Analytics**: `/api/v1/noteStats` — note counts grouped by author email (see [Known gaps](#known-gaps))
+- **Analytics**: `/api/v1/noteStats` — note counts grouped by author email, tenant-scoped
 - **Search**: full-text search on `Note.body` via `infix`/`prefix` JSON:API filters, backed by Lucene
 - **Uploads**: `POST /api/v1/uploads` — multipart upload with a pluggable handler SPI
 - **Validation**: `body` and `email` validated on create/update
@@ -110,17 +110,23 @@ Roughly 300 lines of hand-wired Quarkus code are gone: `AnalyticsDataStoreProduc
 the OpenAPI document, and springdoc and Elide share one `io.swagger.v3` object model, so the JSON
 round-trip the Quarkus version needed to bridge two OpenAPI models is unnecessary.
 
-## Known gaps
+## Analytics
 
-**Analytics is not tenant-scoped.** `/api/v1/noteStats` resolves and groups counts by email, but
-returns the same data regardless of `X-API-KEY`. `TenantAwareDataSource` is registered as the
-`defaultDataSource` bean that Elide's `queryEngine(...)` resolves, but its `getConnection()` is
-never called — instrumenting it shows zero invocations, because the bean is declared
-`autowireCandidate = false` (needed to stop a second `DataSource`-typed bean making every other
-unqualified `DataSource` injection point ambiguous) and so is not injected into `queryEngine`
-either. The two `AnalyticsTest` cases are `@Disabled` with this explanation rather than deleted or
-weakened.
+`/api/v1/noteStats` serves note counts grouped by author email, from an HJSON-defined aggregation
+table under `src/main/resources/analytics`, and is scoped to the requesting tenant:
 
-Fixing it means getting a tenant-aware `DataSource` into the `QueryEngine` without making the
-application's other `DataSource` injection points ambiguous — for example by supplying the
-`QueryEngine` bean directly instead of letting autoconfiguration build it.
+```bash
+curl -H "X-API-KEY: key-a" localhost:8081/api/v1/noteStats
+```
+
+Scoping this took a dedicated `QueryEngine` bean (`AnalyticsQueryEngineConfiguration`). The
+aggregation store queries over plain JDBC, so it cannot use Hibernate's tenant resolver; it needs a
+tenant-aware `DataSource` in its `ConnectionDetails`. Supplying that as a `DataSource` *bean* does
+not work: a second `DataSource`-typed bean makes every other unqualified `DataSource` injection
+point ambiguous, including autoconfigured ones such as `entityManagerFactory`, and marking it
+`autowireCandidate = false` then excludes it from Elide's `queryEngine(...)` as well. Building the
+`QueryEngine` here lets the tenant-aware `DataSource` be handed straight to `ConnectionDetails`
+without ever becoming a bean.
+
+That construction mirrors Elide's own autoconfiguration and must be kept in step with it across
+Elide upgrades — only the `DataSource` differs.

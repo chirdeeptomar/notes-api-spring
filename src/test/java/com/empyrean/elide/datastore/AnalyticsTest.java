@@ -21,16 +21,6 @@ import static org.hamcrest.Matchers.not;
  * classloader workaround that has no equivalent here - the coverage that matters is that the
  * config resolves and the data is correctly scoped, which is asserted end to end instead.
  */
-@org.junit.jupiter.api.Disabled("""
-        Analytics is wired but not yet tenant-correct - see task-7-report.md.
-
-        The aggregation store is registered and /api/v1/noteStats resolves, but
-        TenantAwareDataSource.getConnection() is never called: Elide's SQLQueryEngine obtains its
-        ConnectionDetails once at startup rather than per request, so the tenant-aware wrapper is
-        bypassed and analytics reads whatever schema the pooled connection defaults to.
-
-        Re-enable these tests once the QueryEngine is made to resolve its connection per request.
-        """)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class AnalyticsTest {
 
@@ -39,6 +29,11 @@ class AnalyticsTest {
 
     @LocalServerPort
     int port;
+
+    @BeforeEach
+    void setUp() {
+        RestAssured.port = port;
+    }
 
     @Test
     void noteStatsGroupsCountsByEmail() {
