@@ -31,6 +31,12 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("io.micrometer:micrometer-registry-prometheus")
+    // Required, despite the app building and all tests passing without it: springdoc is what
+    // documents the hand-written @RestControllers. Elide serves /api-docs itself, but that
+    // document contains only its own generated entity paths - drop springdoc and /v3/api-docs
+    // 404s and /api/v1/hello and /api/v1/uploads are documented nowhere. This is the Quarkus
+    // original's "a new resource is documented just by existing" property, which it got from
+    // ScannedResourcePaths.
     // springdoc 3.x is the Spring Boot 4 line (springdoc-openapi 3.1.1's parent is
     // spring-boot-starter-parent 4.1.0); springdoc 2.x targets Spring Boot 3.x. A 2.x
     // version still RESOLVES under Spring Boot 4 but integrates against Spring Boot 3
