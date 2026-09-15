@@ -24,6 +24,13 @@ import java.io.IOException;
  * The {@code finally} clearing {@link TenantContext} is mandatory, not hygiene: servlet
  * threads are pooled, so a leaked tenant would serve the next request on that thread from the
  * wrong schema.
+ * <p>
+ * This filter alone is NOT sufficient to make the tenant visible where Elide does its work.
+ * Elide's controllers return {@code Callable}, so Spring MVC dispatches the actual handling to
+ * an async worker thread after {@code doFilter} has already returned and this filter's
+ * {@code finally} has cleared the {@link ThreadLocal}.
+ * {@link TenantAsyncConfiguration} re-establishes the tenant on that worker thread; both
+ * mechanisms are required.
  */
 @Component
 public class TenantHeaderFilter extends OncePerRequestFilter {
@@ -49,9 +56,15 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
 
-        String path = request.getRequestURI();
-        boolean isGraphql = path.startsWith(graphqlPath);
-        if (!path.startsWith(jsonApiPath) && !isGraphql) {
+        // getRequestURI() includes the servlet context path, but the configured Elide paths are
+        // relative to the context root. Under a non-root server.servlet.context-path the raw URI
+        // would never match the configured prefix, the filter would become a no-op for EVERY
+        // request, and the application would fail OPEN: no 401 for unknown keys and every tenant
+        // silently served from the default schema. Strip the context path so the comparison is
+        // against the same namespace the Elide properties are expressed in.
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        boolean isGraphql = matches(path, graphqlPath);
+        if (!matches(path, jsonApiPath) && !isGraphql) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -88,6 +101,24 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
 
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setContentType(isGraphql ? "application/json" : JSON_API_MEDIA_TYPE);
+        // Set before getWriter(): the encoding is fixed once the writer is obtained, and both
+        // JSON media types are UTF-8 by specification.
+        response.setCharacterEncoding("UTF-8");
         response.getWriter().write(body);
+    }
+
+    /**
+     * Segment-aware prefix match. A plain {@code startsWith} would treat {@code /api/v1extra}
+     * and {@code /api/v1notes} as API paths and reject them with a 401 for an unknown key,
+     * breaking the contract that everything outside the Elide endpoints passes through
+     * untouched. Only the prefix itself, or the prefix followed by a path separator, counts.
+     *
+     * @param path   the context-relative request path
+     * @param prefix the configured Elide endpoint path
+     * @return whether {@code path} lies at or under {@code prefix}
+     */
+    private static boolean matches(String path, String prefix) {
+        return path.equals(prefix)
+                || path.startsWith(prefix.endsWith("/") ? prefix : prefix + "/");
     }
 }

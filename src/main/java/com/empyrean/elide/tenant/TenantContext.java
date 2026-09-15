@@ -3,12 +3,20 @@ package com.empyrean.elide.tenant;
 /**
  * Holds the tenant resolved for the current request, for the duration of that request.
  * <p>
- * A {@link ThreadLocal} is correct here because Spring MVC is servlet-based and blocking:
- * {@code TenantHeaderFilter} (which sets the value) and
- * {@code RequestTenantResolver} / {@code TenantAwareDataSource} (which read it) all run on the
- * same request thread. The Quarkus version of this app had to store the tenant on a Vert.x
- * {@code RoutingContext} instead, because its filter ran on an I/O thread before the
- * request-scoped context existed - that constraint does not apply here.
+ * A {@link ThreadLocal} is the storage, but a single request does NOT stay on one thread here.
+ * Elide's Spring controllers return {@code Callable}, so Spring MVC hands the real work to an
+ * async worker ({@code task-N}) thread while {@code TenantHeaderFilter} set the value on the
+ * servlet ({@code http-nio-...-exec-N}) thread and cleared it as {@code doFilter} unwound.
+ * {@code TenantAsyncConfiguration} is what makes the value visible to
+ * {@code RequestTenantResolver} / {@code TenantAwareDataSource} on the worker thread; without
+ * it they would read {@code null} and silently fall back to the default tenant.
+ * <p>
+ * Consequently, any code that reads this value must run on either the servlet thread or the
+ * MVC-managed async worker for the same request. Work handed to any OTHER thread (an
+ * {@code @Async} method, a manual {@code CompletableFuture}, a scheduled job) must capture
+ * {@link #get()} on the calling thread and pass it explicitly - this is a plain
+ * {@code ThreadLocal}, not an {@code InheritableThreadLocal}, and no context-propagation
+ * library is in use.
  * <p>
  * Servlet container threads are pooled and reused, so {@link #clear()} in a {@code finally}
  * block is mandatory: a leaked value would silently serve the next request on that thread
