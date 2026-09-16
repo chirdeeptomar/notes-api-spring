@@ -33,6 +33,17 @@ dependencies {
 
     implementation(libs.datafaker)
 
+    // Hibernate second-level cache, backed by Infinispan through the JCache (JSR-107) bridge.
+    // See libs.versions.toml for why the JCache route is used rather than Infinispan's native
+    // Hibernate provider, and TenantAwareJCacheRegionFactory for how regions are tenant-scoped.
+    // Both embedded and remote providers ship so notes.cache.mode selects between them at
+    // startup; only the one named by the configured mode is ever instantiated.
+    implementation(libs.hibernate.jcache)
+    implementation(libs.infinispan.jcache)
+    implementation(libs.infinispan.core)
+    implementation(libs.infinispan.jcache.remote)
+    implementation(libs.infinispan.client.hotrod)
+
     runtimeOnly(libs.h2)
     runtimeOnly(libs.postgresql)
 

@@ -81,7 +81,7 @@ A JVM image only; the Quarkus project's native-image variants have no equivalent
 ## Build and test
 
 ```bash
-./gradlew build     # compile + run the full test suite (73 tests)
+./gradlew build     # compile + run the full test suite (96 tests)
 ./gradlew test      # tests only
 ./gradlew bootJar   # executable jar
 ```
@@ -97,27 +97,29 @@ you do not have a JDK at the path in `gradle.properties`, point it at your own J
 
 ### Tests
 
-73 tests, no skips. Beyond ordinary CRUD coverage, several exist to pin down behaviour that
+96 tests, no skips. Beyond ordinary CRUD coverage, several exist to pin down behaviour that
 previously broke silently and would otherwise regress unnoticed:
 
-| Test | Guards |
-|---|---|
-| `AsyncTenantPropagationTest` | the tenant survives Spring MVC's async boundary (see below) |
-| `OpenInViewDisabledIsolationTest` | tenant isolation does not depend on `open-in-view` |
-| `TenantSchemaTest` | tenant tables match Hibernate's entity-derived table, column for column |
-| `SearchTest` | search is Lucene-served, and does not leak across tenants |
-| `ApiDocsTest` | the hand-written controllers are documented, and the UI loads the right document |
+| Test                              | Guards                                                                           |
+| --------------------------------- | -------------------------------------------------------------------------------- |
+| `AsyncTenantPropagationTest`      | the tenant survives Spring MVC's async boundary (see below)                      |
+| `OpenInViewDisabledIsolationTest` | tenant isolation does not depend on `open-in-view`                               |
+| `TenantSchemaTest`                | tenant tables match Hibernate's entity-derived table, column for column          |
+| `SearchTest`                      | search is Lucene-served, and does not leak across tenants                        |
+| `ApiDocsTest`                     | the hand-written controllers are documented, and the UI loads the right document |
+| `NoteCacheTest`                   | the L2 cache is tenant-scoped, asserted at the cache rather than over HTTP       |
+| `QuerySourceLoggingTest`          | each request's log line names the tier that really served it, and the tenant     |
 
 ## Multi-tenancy
 
 Each tenant gets its own DB schema. The tenant is chosen by the `X-API-KEY` header:
 
-| Header | Tenant |
-|---|---|
-| *(omitted)* | `public` |
-| `key-a` | `tenant_a` |
-| `key-b` | `tenant_b` |
-| anything else | `401` |
+| Header        | Tenant     |
+| ------------- | ---------- |
+| _(omitted)_   | `public`   |
+| `key-a`       | `tenant_a` |
+| `key-b`       | `tenant_b` |
+| anything else | `401`      |
 
 ```bash
 curl localhost:8081/api/v1/notes                          # public tenant
@@ -134,7 +136,7 @@ or that tenant's search index will not be partitioned.
 Worth knowing before changing any of this, because two parts are non-obvious:
 
 1. **Elide's controllers return `Callable`**, so Spring MVC dispatches the actual work to an async
-   worker thread. A `ThreadLocal` set in a servlet filter is therefore *not* visible where the data
+   worker thread. A `ThreadLocal` set in a servlet filter is therefore _not_ visible where the data
    access happens. `TenantAsyncConfiguration` (a `CallableProcessingInterceptor`) propagates the
    tenant onto the worker thread and clears it afterwards. Without it, every tenant's traffic
    silently reads the `public` schema.
@@ -163,8 +165,8 @@ curl 'localhost:8081/api/v1/notes?filter[notes.body][infix]=needle'
 ```
 
 Terms must be 3–10 characters (Elide `SearchDataStore` defaults); outside that range the request is
-rejected with `400`, which is also how you can tell a query was served by Lucene rather than
-falling through to a SQL `LIKE`.
+rejected with `400`. To confirm a query was actually served by Lucene rather than falling through
+to a SQL `LIKE`, read the request's log line — see [Query-source logging](#query-source-logging).
 
 `Note.body` carries `@FullTextField(searchable = Searchable.YES)`. The `YES` is required: Elide's
 `fieldIsIndexed()` check tests for it, and the annotation's default silently routes queries to the
@@ -172,6 +174,224 @@ plain JPA store instead.
 
 Tests use an in-memory Lucene directory (`local-heap`, set in `tasks.test`) because several
 `@SpringBootTest` contexts in one JVM would otherwise contend for the same `write.lock`.
+
+## Caching
+
+`Note` is cached in Infinispan as Hibernate's second-level cache, so a repeat read of
+`/api/v1/notes/{id}` is served from memory instead of the database. Reads by id only — see
+"What is and is not cached" below.
+
+Infinispan is reached through the JCache (JSR-107) bridge (`hibernate-jcache` +
+`infinispan-jcache`) rather than Infinispan's own Hibernate provider: the newest of those,
+`infinispan-hibernate-cache-v66`, targets Hibernate ORM 6.6, and this project is on 7.4. The JCache
+route couples through the JSR-107 standard instead of Hibernate's internal cache SPI, so that
+version gap does not apply.
+
+Topology for embedded mode is in [`infinispan.xml`](src/main/resources/infinispan.xml) (remote mode
+configures its caches separately — see below): clustered **invalidation**
+mode, not replicated or distributed. Infinispan's 2LC guidance is explicit that
+replicated/distributed caches with `READ_WRITE` must disable eviction, and an unbounded entity
+cache is an OOM risk on a large dataset. Invalidation keeps each node's cache bounded and
+evictable — a node caches only what it read, and a write broadcasts a _removal_ so no node serves a
+stale value.
+
+### Embedded or remote
+
+`notes.cache.mode` selects where Infinispan runs. **Embedded** is the default: Infinispan runs
+inside the application JVM, so there is nothing to deploy and no marshalling contract on entities,
+but cache memory competes with application heap and is cold after a restart.
+
+**Remote** reaches an external Infinispan server over Hot Rod. Activate it with the `remote`
+profile rather than by editing config. Only the password is required — the host defaults to
+`localhost:11222` and the user to `admin`:
+
+```bash
+SPRING_PROFILES_ACTIVE=dev,remote ISPN_PASSWORD=password ./gradlew bootRun
+```
+
+Override the rest for a real server:
+
+```bash
+SPRING_PROFILES_ACTIVE=remote \
+ISPN_HOSTS=cache-host:11222 \
+ISPN_USER=… ISPN_PASSWORD=… ./gradlew bootRun
+```
+
+`ISPN_PASSWORD` deliberately has no default. A blank password is rejected as
+`ISPN006024: Invalid credentials`, which reads like a wrong password rather than an unset variable.
+
+|                      | Embedded (default) | Remote                            |
+| -------------------- | ------------------ | --------------------------------- |
+| Runs in              | the app JVM        | its own server                    |
+| Read cost            | in-heap            | one network hop                   |
+| Cache memory         | shares app heap    | isolated from app heap            |
+| Survives app restart | no                 | yes                               |
+| Capacity             | per-node hot set   | scales with the cache cluster     |
+| Marshalling          | not needed         | Java serialization plus allowlist |
+| Topology from        | `infinispan.xml`   | per-cache Hot Rod properties      |
+
+Both providers ship on the classpath, so the mode is a configuration switch rather than a rebuild.
+Each registers its own JCache `CachingProvider` via `ServiceLoader`, which is why
+[`CacheProperties`](src/main/java/com/empyrean/elide/config/CacheProperties.java) names the
+provider class explicitly instead of letting `Caching.getCachingProvider()` choose between them.
+
+Remote mode needs marshalling, which embedded does not — entries cross a network boundary. It is
+configured in [`hotrod-client.properties`](src/main/resources/hotrod-client.properties) as Java
+serialization with an explicit deserialization allowlist. Two details are easy to get wrong:
+
+- **It is not the entity that crosses the wire.** The cache key is Hibernate's
+  `CacheKeyImplementation` (the class carrying the tenant) and the value is a cache entry of
+  disassembled field values. Annotating `Note` for Protostream would not be enough.
+- **The allowlist must cover JDBC types, not just declared ones.** `Note.createdDate` is a
+  `java.util.Date` but is cached as a `java.sql.Timestamp`. A missing entry fails on _read_ with an
+  HTTP 500, not at startup — expect the same for `BigDecimal` on monetary fields.
+
+Connection settings use Infinispan's placeholder syntax, not Spring's: environment variables need an
+`env.` prefix (`${env.ISPN_USER}`), because that file is read by the Hot Rod client rather
+than by Spring. Plain `${VAR}` resolves against _system properties_ and silently falls through to
+the literal default.
+
+#### Server-side caches
+
+The caches are **created automatically** on first use — you never need to pre-create them, and
+deleting one is safe because the app recreates it. Creation is lazy, so a tenant's cache only
+appears once that tenant is first read.
+
+What auto-creation does _not_ give you is configuration. Left to itself the server creates
+`{"local-cache": {}}`: **unbounded**, no expiration, no statistics. It works — entries are stored
+and served correctly — but the memory bound is gone and the admin console shows `-1` for every
+counter, which looks like an empty cache.
+
+`infinispan.xml` does not apply here: it configures an _embedded_ container, and the server is a
+separate process with its own configuration. So the topology is sent per-cache from
+`hotrod-client.properties` instead:
+
+```properties
+infinispan.client.hotrod.cache.[com.empyrean.elide.model.Note.tenant_a].configuration=\
+  <local-cache statistics="true"><memory max-count="10000"/>…</local-cache>
+```
+
+**Note the square brackets.** These cache names contain dots, and the client parses an unbracketed
+key by cutting at the first dot after the prefix — so the unbracketed form is read as a cache named
+`com.empyrean` and silently discarded, leaving you with the unbounded default.
+
+In a managed deployment, prefer creating the caches on the server (or from a template) and dropping
+these lines.
+
+`default-update-timestamps-region` never appears, because Hibernate only creates it when the query
+cache is enabled — which it is not, by design.
+
+Verified end to end against Infinispan Server 16.2.3: reads served from the remote cache with no
+SQL, and `tenant_a`/`tenant_b` entries confirmed in separate server-side caches with
+`max-count=10000` applied.
+
+`notes.cache.enabled=false` turns the second-level cache off entirely, sending every read to the
+database — useful when diagnosing whether the cache is implicated in a problem.
+
+### Tenant scoping
+
+Two independent layers, both needed:
+
+- **Keys** carry the tenant. Hibernate's `DefaultCacheKeysFactory` folds the current tenant
+  identifier into every entity cache key, so `tenant_a` and `tenant_b` reading the same row id
+  never see each other's data. This is built in and needs no configuration.
+- **Regions** are split per tenant by
+  [`TenantAwareJCacheRegionFactory`](src/main/java/com/empyrean/elide/config/TenantAwareJCacheRegionFactory.java),
+  giving `com.empyrean.elide.model.Note.tenant_a`, `....tenant_b` and `....public`. Keys alone are
+  correct but share one eviction budget, so a tenant running a large scan would evict a quieter
+  tenant's hot entries. Splitting regions makes capacity, expiry and hit rates per-tenant.
+
+Adding a tenant touches three places that must stay in sync — `notes.tenant.*`,
+`hibernate.search.multi_tenancy.tenant_ids`, and the per-tenant caches (in `infinispan.xml` for
+embedded mode, or the per-cache properties in `hotrod-client.properties` for remote) — and requires
+a restart, because regions are resolved when the `SessionFactory` is built.
+
+### What is and is not cached
+
+| Access path                   | Served from |
+| ----------------------------- | ----------- |
+| `GET /api/v1/notes/{id}`      | Infinispan  |
+| `GET /api/v1/notes` (list)    | database    |
+| `filter[notes.body][infix]=…` | Lucene      |
+
+The query cache is **off**, deliberately, and re-enabling it is not a one-line change. Hibernate's
+`QueryKey` is built from the SQL string, bound parameters, pagination and filter names — it carries
+no tenant identifier. Under schema-per-tenant the tenant lives on the JDBC connection and never in
+the SQL text, so every tenant produces a byte-identical key and the first tenant to run a query
+would serve its rows to all the others. This is the same defect that keeps
+`elide.aggregation-store.query-cache.enabled=false`. Separately, Elide 7.2.0 never marks queries
+cacheable, so the query cache is inert without an `EntityManager` proxy regardless.
+
+### Choosing a strategy for a new entity
+
+This is the part to copy when adding entities, rather than the annotation itself:
+
+| Data shape                                                  | Strategy               | Why                                                                |
+| ----------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------ |
+| Mutable, read far more than written (products, instruments) | `READ_WRITE`           | soft locks; a concurrent write never leaves a stale entry readable |
+| Effectively static (currencies, exchanges, calendars)       | `NONSTRICT_READ_WRITE` | cheaper; tolerates a brief stale window                            |
+| Volatile (prices, positions, balances)                      | do not cache           | staleness is a correctness bug, not a latency trade                |
+
+`TRANSACTIONAL` is not available: it needs a JTA transaction manager this app does not configure.
+Each new cached entity also needs its own per-tenant caches in `infinispan.xml`, sized for its own
+working set.
+
+## Query-source logging
+
+This project has three read paths — the Infinispan cache, the Lucene index and the database — and
+the first question when a request is slow is which one answered it. Each API request logs one line
+saying so:
+
+```text
+GET /api/v1/notes/aac491e5 tenant=tenant_a status=200 servedBy=cache   cacheHits=1 cacheMisses=0 indexQueries=0 dbLoads=0
+GET /api/v1/notes         tenant=tenant_a status=200 servedBy=index   cacheHits=1 cacheMisses=0 indexQueries=1 dbLoads=1
+GET /api/v1/notes/aac491e5 tenant=tenant_b status=404 servedBy=database cacheHits=0 cacheMisses=1 indexQueries=0 dbLoads=1
+POST /api/v1/notes        tenant=tenant_a status=201 servedBy=none    cacheHits=0 cacheMisses=1 indexQueries=0 dbLoads=0
+```
+
+`servedBy` names the tier that **decided** the result, which is not the same as the only tier
+touched:
+
+| Value            | Meaning                                                                       |
+| ---------------- | ----------------------------------------------------------------------------- |
+| `cache`          | served from Infinispan; no SQL issued                                         |
+| `index`          | Lucene selected the rows — note `dbLoads=1`, explained below                  |
+| `database`       | SQL did the work; a cache miss preceded it if the entity is cacheable         |
+| `database+cache` | SQL ran, but part of the result came from cache                               |
+| `none`           | a write: nothing was served from any read tier                                |
+| `nothing`        | no tier was consulted (e.g. a request rejected before any data access)        |
+
+**An index-served read still issues SQL, and that is expected.** Hibernate Search returns the
+matching ids and Hibernate then fetches those rows by primary key (`where n1_0.id in (?)`), so
+`servedBy=index` with `dbLoads=1` is the normal shape. Ranking the database ahead of the index here
+would label every full-text query `database` and hide the index in the logs meant to reveal it.
+What distinguishes the two is whether the filtered column appears in the SQL's `WHERE` clause — if
+the database had done the filtering, it would.
+
+This is not a replacement for `spring.jpa.show-sql`, which prints statement text with no tenant, no
+request, and no correlation to the cache lookups around it. The two answer different questions.
+
+```properties
+logging.level.com.empyrean.elide.observability=INFO   # one line per request (default)
+# one line per individual L2 cache lookup, with region and tenant:
+logging.level.com.empyrean.elide.config.TenantAwareJCacheRegionFactory=TRACE
+```
+
+At `TRACE` each cache lookup names the per-tenant region it resolved to:
+
+```text
+L2 MISS region=com.empyrean.elide.model.Note.tenant_a tenant=tenant_a
+L2 HIT  region=com.empyrean.elide.model.Note.tenant_a tenant=tenant_a
+```
+
+The trace logger is the region factory itself, not its inner `TenantAwareStorageAccess` class that
+does the lookups. Spring reads `$` in a properties key as a placeholder delimiter, so a logger name
+containing one never binds and the level is silently ignored — the logging simply would not appear.
+
+The tally is accumulated in a `ThreadLocal` and propagated across Spring MVC's async boundary by
+`TenantAsyncConfiguration`, alongside the tenant. That propagation is load-bearing: Elide's
+controllers return `Callable`, so without it every Elide request — meaning every request that
+touches data — would log an empty tally while appearing to work.
 
 ## API usage
 
@@ -219,11 +439,11 @@ the two.
 `Note` carries sample Elide hooks demonstrating each transaction phase, recorded in-memory by
 `HookInvocationRecorder`:
 
-| Hook | Phase | Notes |
-|---|---|---|
-| `NoteNormalizePreSecurityHook` | PRESECURITY | normalizes before security checks and validation run |
-| `NoteAuditPreCommitHook` | PRECOMMIT | `oncePerRequest = false`, so it fires per changed field with a populated `ChangeSpec` |
-| `NotePostCommitHook` | POSTCOMMIT | left at the default, so one note produces exactly one event |
+| Hook                           | Phase       | Notes                                                                                 |
+| ------------------------------ | ----------- | ------------------------------------------------------------------------------------- |
+| `NoteNormalizePreSecurityHook` | PRESECURITY | normalizes before security checks and validation run                                  |
+| `NoteAuditPreCommitHook`       | PRECOMMIT   | `oncePerRequest = false`, so it fires per changed field with a populated `ChangeSpec` |
+| `NotePostCommitHook`           | POSTCOMMIT  | left at the default, so one note produces exactly one event                           |
 
 ### Uploads
 
@@ -240,11 +460,11 @@ to the controller. None ships with the app, so by default every upload is report
 
 ## Differences from the Quarkus original
 
-| | Quarkus | Spring |
-|---|---|---|
-| Metrics | `/q/metrics` | `/actuator/prometheus` |
-| Port | 8080 | **8081** |
-| Raw OpenAPI scan | `/q/openapi` | `/v3/api-docs` |
+|                  | Quarkus      | Spring                 |
+| ---------------- | ------------ | ---------------------- |
+| Metrics          | `/q/metrics` | `/actuator/prometheus` |
+| Port             | 8080         | **8081**               |
+| Raw OpenAPI scan | `/q/openapi` | `/v3/api-docs`         |
 
 Four classes disappear (~576 lines): `AnalyticsDataStoreProducer`,
 `RuntimeClassLoaderClassScanner`, `ScannedResourcePaths` and `ElideSetting`. Elide's Spring
@@ -276,7 +496,7 @@ curl -H "X-API-KEY: key-a" localhost:8081/api/v1/noteStats
 
 Scoping this took a dedicated `QueryEngine` bean (`AnalyticsQueryEngineConfiguration`). The
 aggregation store queries over plain JDBC, so it cannot use Hibernate's tenant resolver; it needs a
-tenant-aware `DataSource` in its `ConnectionDetails`. Supplying that as a `DataSource` *bean* does
+tenant-aware `DataSource` in its `ConnectionDetails`. Supplying that as a `DataSource` _bean_ does
 not work: a second `DataSource`-typed bean makes every other unqualified `DataSource` injection
 point ambiguous, including autoconfigured ones such as `entityManagerFactory`, and marking it
 `autowireCandidate = false` then excludes it from Elide's `queryEngine(...)` as well. Building the

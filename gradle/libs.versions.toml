@@ -29,6 +29,18 @@ restAssured = "5.5.2"
 # build.gradle.kts.
 groovy = "4.0.22"
 
+# Infinispan supplies the JSR-107 (JCache) provider backing Hibernate's second-level cache.
+# NOT managed by any BOM here, so pinned explicitly.
+#
+# Deliberately NOT using Infinispan's native Hibernate provider: the newest one published is
+# infinispan-hibernate-cache-v66, which targets Hibernate ORM 6.6, while this project resolves
+# hibernate-core 7.4.x through the Spring Boot BOM. No v7 provider exists. The supported route
+# is therefore the JCache bridge (hibernate-jcache + infinispan-jcache), which couples through
+# the JSR-107 standard instead of Hibernate's internal cache SPI and so is unaffected by that
+# version gap. Both sides agree on javax.cache:cache-api 1.1.1, and infinispan-jcache declares
+# it "provided" so Hibernate's copy is the one on the classpath.
+infinispan = "16.1.4"
+
 [libraries]
 # Brings in spring-boot-starter-web and spring-boot-starter-data-jpa transitively.
 elide-spring-boot-starter = { module = "com.yahoo.elide:elide-spring-boot-starter", version.ref = "elide" }
@@ -47,6 +59,20 @@ postgresql = { module = "org.postgresql:postgresql" }
 springdoc-openapi-starter-webmvc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
 datafaker = { module = "net.datafaker:datafaker", version.ref = "datafaker" }
 rest-assured = { module = "io.rest-assured:rest-assured", version.ref = "restAssured" }
+
+# Second-level cache. hibernate-jcache is version-less (Spring Boot BOM manages the whole
+# hibernate-* line, so pinning it here would be the exact conflict this file warns about);
+# the Infinispan artifacts are not BOM-managed and use the pin above.
+hibernate-jcache = { module = "org.hibernate.orm:hibernate-jcache" }
+# Embedded mode (notes.cache.mode=embedded, the default).
+infinispan-jcache = { module = "org.infinispan:infinispan-jcache", version.ref = "infinispan" }
+infinispan-core = { module = "org.infinispan:infinispan-core", version.ref = "infinispan" }
+# Remote mode (notes.cache.mode=remote). Both sets are shipped so the mode is a config switch
+# rather than a rebuild; each jar registers its own javax.cache.spi.CachingProvider via
+# ServiceLoader, which is why CacheProperties.Mode names the provider class explicitly instead of
+# letting Caching.getCachingProvider() pick between the two.
+infinispan-jcache-remote = { module = "org.infinispan:infinispan-jcache-remote", version.ref = "infinispan" }
+infinispan-client-hotrod = { module = "org.infinispan:infinispan-client-hotrod", version.ref = "infinispan" }
 
 # No [libraries] entries for Groovy: it is never declared as a dependency, only version-pinned
 # through dependencyManagement, which reads libs.versions.groovy directly.

@@ -4,3 +4,4 @@ bin/
 *.class
 lucene-indexes/
 .DS_Store
+graphify-out/

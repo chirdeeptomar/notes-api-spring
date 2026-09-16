@@ -1,6 +1,7 @@
 package com.empyrean.elide.config;
 
 import com.empyrean.elide.datastore.TenantAwareDataSource;
+import com.empyrean.elide.observability.QuerySourceAwareSearchDataStore;
 import com.empyrean.elide.tenant.TenantInfo;
 import com.yahoo.elide.core.datastore.DataStore;
 import com.yahoo.elide.datastores.jpa.JpaDataStore;
@@ -132,7 +133,11 @@ public class ElideStoreConfiguration {
         while (iterator.hasNext()) {
             DataStore store = iterator.next();
             if (store instanceof JpaDataStore jpaStore) {
-                iterator.set(new SearchDataStore(jpaStore, entityManagerFactory, true));
+                // Wrapped once more so the logs can say whether a filtered read was answered by
+                // Lucene or fell through to SQL; see QuerySourceAwareSearchDataStore, which
+                // observes the outcome rather than reimplementing Elide's index-eligibility rule.
+                iterator.set(new QuerySourceAwareSearchDataStore(
+                        new SearchDataStore(jpaStore, entityManagerFactory, true)));
             }
         }
     }

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Infinispan configuration backing Hibernate's second-level cache, via the JCache (JSR-107)
+  bridge. Referenced by spring.jpa.properties.hibernate.javax.cache.uri in application.properties.
+
+  CLUSTERING MODE: invalidation, not replicated or distributed. Infinispan's own Hibernate 2LC
+  guidance is explicit that replicated/distributed caches with the read-write strategy require
+  eviction to be switched off ("eviction should not be used in this configuration as it can lead
+  to consistency issues"). An unbounded entity cache is an OOM waiting to happen on a large
+  dataset, which is the opposite of what caching is meant to buy here. Invalidation mode keeps
+  every node's cache bounded and evictable: each node caches only what it actually read, and a
+  write broadcasts a *removal* message so no other node keeps serving the old value. The cluster
+  is still a cluster - nodes coordinate on writes - it simply does not replicate the data itself.
+  It also needs no marshalling contract on the entities, since entries never leave their node.
+
+  ONE CACHE PER (ENTITY, TENANT). Region names are "<entity FQCN>.<tenant>", built by
+  TenantAwareJCacheRegionFactory. Hibernate's cache keys already carry the tenant, so this split
+  is not what makes the cache correct - it is what makes each tenant's capacity independent, so a
+  tenant running a large scan cannot evict a quieter tenant's hot entries, and so per-tenant hit
+  rates and sizes can be read off separately.
+
+  ADDING A TENANT: add an <invalidation-cache> per entity here, add the tenant to notes.tenant.*
+  and to hibernate.search.multi_tenancy.tenant_ids in application.properties, then restart. The
+  region factory resolves its caches when the SessionFactory is built, so a new tenant cannot be
+  picked up at runtime.
+
+  ADDING AN ENTITY: add a <cache-template> for it (sized for its own working set) plus one
+  <invalidation-cache> per tenant referencing that template.
+-->
+<infinispan xmlns="urn:infinispan:config:16.1"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="urn:infinispan:config:16.1 https://infinispan.org/schemas/infinispan-config-16.1.xsd">
+
+    <cache-container name="notes-api" statistics="true">
+        <!--
+          "udp" is one of Infinispan's built-in stacks (UDP multicast), fine for local development
+          and tests. For a real deployment switch to "tcp" with an explicit discovery protocol, or
+          "kubernetes" - multicast is usually unavailable in cloud networks.
+        -->
+        <transport stack="udp" cluster="notes-api-cluster"/>
+
+        <!--
+          Per-entity template. max-count is the per-tenant entry budget: sized for one tenant's
+          hot set, not for the whole dataset. A financial entity with a large reference set
+          should get its own template with a larger budget rather than inflating this one.
+
+          max-idle expires entries that stop being read, so a tenant that goes quiet releases
+          heap without waiting for eviction pressure from other entries.
+        -->
+        <invalidation-cache-configuration name="entity-region" mode="SYNC" statistics="true">
+            <memory max-count="10000"/>
+            <expiration max-idle="1800000" interval="60000"/>
+        </invalidation-cache-configuration>
+
+        <!-- Note entity, one cache per tenant. Names must match TenantAwareJCacheRegionFactory. -->
+        <invalidation-cache name="com.empyrean.elide.model.Note.public" configuration="entity-region"/>
+        <invalidation-cache name="com.empyrean.elide.model.Note.tenant_a" configuration="entity-region"/>
+        <invalidation-cache name="com.empyrean.elide.model.Note.tenant_b" configuration="entity-region"/>
+
+        <!--
+          Hibernate's internal regions. These are NOT per-tenant: they are keyed by table name and
+          query, not by entity id, and Hibernate looks them up under fixed names.
+
+          The timestamps region must never evict or expire. Hibernate uses it to decide whether a
+          cached query result is still fresh; losing a timestamp entry makes it treat cached data
+          as potentially stale. Infinispan's 2LC guidance calls this out specifically, hence
+          replicated (not invalidation) with no <memory> or <expiration> bound.
+        -->
+        <replicated-cache name="default-update-timestamps-region" mode="ASYNC" statistics="true"/>
+
+        <!--
+          Present because the region factory expects it to exist, but unused: query caching is
+          switched off (hibernate.cache.use_query_cache=false in application.properties) because
+          Hibernate's QueryKey carries no tenant identifier, and under schema-per-tenant every
+          tenant generates byte-identical SQL. See the comment on that property.
+        -->
+        <local-cache name="default-query-results-region" statistics="true">
+            <memory max-count="1000"/>
+            <expiration max-idle="60000"/>
+        </local-cache>
+    </cache-container>
+</infinispan>

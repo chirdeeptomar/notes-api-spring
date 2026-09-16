@@ -1,5 +1,6 @@
 package com.empyrean.elide.tenant;
 
+import com.empyrean.elide.observability.QuerySourceRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Configuration;
@@ -65,6 +66,19 @@ public class TenantAsyncConfiguration implements WebMvcConfigurer {
      */
     static final String TENANT_ATTRIBUTE = TenantAsyncConfiguration.class.getName() + ".TENANT";
 
+    /**
+     * Carries the per-request {@link QuerySourceRecorder} across the same hand-off, for the same
+     * reason and by the same mechanism as the tenant. Without this the cache, index and database
+     * counters would all be recorded into a recorder that no longer exists on the worker thread,
+     * and every Elide request - which is to say every request that touches data - would log an
+     * empty tally while looking perfectly healthy.
+     * <p>
+     * Unlike the tenant, the recorder is <em>not</em> cleared in {@code postProcess}: the filter's
+     * async listener reads it after the callable returns. It is cleared in
+     * {@code afterCompletion}, once the summary has been emitted.
+     */
+    static final String RECORDER_ATTRIBUTE = TenantAsyncConfiguration.class.getName() + ".RECORDER";
+
     @Override
     public void configureAsyncSupport(AsyncSupportConfigurer configurer) {
         configurer.registerCallableInterceptors(new TenantPropagatingInterceptor());
@@ -77,6 +91,8 @@ public class TenantAsyncConfiguration implements WebMvcConfigurer {
         public <T> void beforeConcurrentHandling(NativeWebRequest request, Callable<T> task) {
             String tenantId = TenantContext.get();
             request.setAttribute(TENANT_ATTRIBUTE, tenantId, RequestAttributes.SCOPE_REQUEST);
+            request.setAttribute(RECORDER_ATTRIBUTE, QuerySourceRecorder.current(),
+                    RequestAttributes.SCOPE_REQUEST);
             LOG.debug("captured tenant={} on {} for async handoff",
                     tenantId, Thread.currentThread().getName());
         }
@@ -84,6 +100,9 @@ public class TenantAsyncConfiguration implements WebMvcConfigurer {
         /** Runs on the async worker thread, immediately before the {@code Callable}. */
         @Override
         public <T> void preProcess(NativeWebRequest request, Callable<T> task) {
+            QuerySourceRecorder.bind((QuerySourceRecorder) request.getAttribute(
+                    RECORDER_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST));
+
             Object tenantId = request.getAttribute(TENANT_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
             if (tenantId == null) {
                 // No tenant was in scope on the servlet thread (a non-API path, or a handler
@@ -101,24 +120,31 @@ public class TenantAsyncConfiguration implements WebMvcConfigurer {
         @Override
         public <T> void postProcess(NativeWebRequest request, Callable<T> task, Object result) {
             TenantContext.clear();
+            // Unbind from this pooled worker thread, but leave the instance on the request
+            // attribute: the filter's async listener still has to read the finished tally.
+            QuerySourceRecorder.clear();
         }
 
         @Override
         public <T> Object handleTimeout(NativeWebRequest request, Callable<T> task) {
             TenantContext.clear();
+            QuerySourceRecorder.clear();
             return RESULT_NONE;
         }
 
         @Override
         public <T> Object handleError(NativeWebRequest request, Callable<T> task, Throwable t) {
             TenantContext.clear();
+            QuerySourceRecorder.clear();
             return RESULT_NONE;
         }
 
         @Override
         public <T> void afterCompletion(NativeWebRequest request, Callable<T> task) {
             request.removeAttribute(TENANT_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+            request.removeAttribute(RECORDER_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
             TenantContext.clear();
+            QuerySourceRecorder.clear();
         }
     }
 }

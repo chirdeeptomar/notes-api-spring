@@ -5,11 +5,14 @@ import com.empyrean.elide.hook.NoteNormalizePreSecurityHook;
 import com.empyrean.elide.hook.NotePostCommitHook;
 import com.yahoo.elide.annotation.Include;
 import com.yahoo.elide.annotation.LifeCycleHookBinding;
+import jakarta.persistence.Cacheable;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
+import org.hibernate.annotations.Cache;
+import org.hibernate.annotations.CacheConcurrencyStrategy;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -36,6 +39,28 @@ import java.util.UUID;
 @Getter
 @Include(name = "notes")
 @Indexed
+// Second-level cached, so a repeat read of /api/v1/notes/{id} is served from Infinispan rather
+// than the database. Tenant-safe without extra work: Hibernate folds the current tenant into the
+// cache key (DefaultCacheKeysFactory#createEntityKey), and TenantAwareJCacheRegionFactory
+// additionally gives each tenant its own region so eviction budgets are not shared.
+//
+// Caching here is by ID only. Filtering on body routes to the Lucene index via SearchDataStore
+// and never touches this cache; unfiltered list queries go to the database, because Hibernate's
+// query cache is off (see hibernate.cache.use_query_cache in application.properties).
+//
+// CHOOSING A STRATEGY FOR A NEW ENTITY - this is the decision to copy, not the annotation:
+//   READ_WRITE            mutable data read far more often than written (products, instruments).
+//                         Soft locks mean a concurrent write never leaves a stale entry readable.
+//   NONSTRICT_READ_WRITE  effectively static reference data (currencies, exchanges, calendars).
+//                         Cheaper, but tolerates a brief stale window after a write.
+//   (do not cache)        volatile data where staleness is a correctness bug rather than a
+//                         latency trade - prices, positions, balances.
+// TRANSACTIONAL is not an option here: it requires a JTA transaction manager this app does not
+// configure.
+//
+// Note is READ_WRITE because it is mutable through both JSON:API and GraphQL.
+@Cacheable
+@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
 // Normalize before security checks and validation run, so the stored value is the one that
 // gets validated. Bound for CREATE and UPDATE separately: the annotation takes one operation.
 @LifeCycleHookBinding(operation = LifeCycleHookBinding.Operation.CREATE,

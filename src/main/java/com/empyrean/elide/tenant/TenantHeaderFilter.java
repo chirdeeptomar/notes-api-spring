@@ -1,5 +1,6 @@
 package com.empyrean.elide.tenant;
 
+import com.empyrean.elide.observability.QuerySourceRecorder;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -83,6 +84,13 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
 
         try {
             TenantContext.set(tenantId);
+            // Record it on the request's tally too. The query-source summary is emitted from an
+            // async callback, long after the finally below has cleared the ThreadLocal, so reading
+            // the tenant at that point would report "none" for every request.
+            QuerySourceRecorder recorder = QuerySourceRecorder.current();
+            if (recorder != null) {
+                recorder.setTenantId(tenantId);
+            }
             LOG.debug("filter resolved tenant={} for api key", tenantId);
             filterChain.doFilter(request, response);
         } finally {
