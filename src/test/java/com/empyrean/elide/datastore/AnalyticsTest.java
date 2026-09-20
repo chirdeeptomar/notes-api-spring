@@ -1,7 +1,6 @@
 package com.empyrean.elide.datastore;
 
 import io.restassured.RestAssured;
-import io.restassured.specification.RequestSpecification;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -34,9 +33,10 @@ class AnalyticsTest {
     @Test
     void noteStatsGroupsCountsByEmail() {
         String email = "stats-" + UUID.randomUUID() + "@example.com";
-        createNote(null, "a note for stats", email);
+        createNote("key-a", "a note for stats", email);
 
         given()
+                .header("X-API-KEY", "key-a")
                 .accept(JSON_API)
                 .get(STATS_PATH)
                 .then()
@@ -80,11 +80,9 @@ class AnalyticsTest {
     }
 
     private void createNote(String apiKey, String body, String email) {
-        RequestSpecification spec = given();
-        if (apiKey != null) {
-            spec = spec.header("X-API-KEY", apiKey);
-        }
-        spec.contentType(JSON_API)
+        given()
+                .header("X-API-KEY", apiKey)
+                .contentType(JSON_API)
                 .accept(JSON_API)
                 .body("""
                         {"data":{"type":"notes","attributes":{"body":"%s","email":"%s"}}}"""

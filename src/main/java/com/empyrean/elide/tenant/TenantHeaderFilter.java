@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -17,10 +18,18 @@ import java.io.IOException;
  * Resolves which tenant a JSON:API or GraphQL request belongs to from the {@code X-API-KEY}
  * header, and publishes it on {@link TenantContext} for the rest of the request.
  * <p>
- * A missing header resolves to {@link TenantInfo#getDefaultTenant()}; a header present but not
- * mapped to any tenant is rejected with {@code 401}. Only requests under the configured
- * JSON:API path ({@code elide.json-api.path}) or GraphQL path ({@code elide.graphql.path}) are
- * affected - other endpoints (docs, metrics, explorer UI) pass through untouched.
+ * A missing or blank header is rejected with {@code 401} ({@code "Missing X-API-KEY"}); a header
+ * present but not mapped to any tenant is also rejected with {@code 401}
+ * ({@code "Unknown X-API-KEY"}). There is no default/"public" tenant a request can fall back
+ * into - every request must present a key matching one of {@link TenantInfo}'s configured
+ * tenants. Only requests under the configured JSON:API path ({@code elide.json-api.path}) or
+ * GraphQL path ({@code elide.graphql.path}) are affected - other endpoints (docs, metrics,
+ * explorer UI) pass through untouched.
+ * <p>
+ * Registered only when {@code svc.tenancy.enabled=true} - multi-tenancy is opt-in, so this bean
+ * does not exist by default. When disabled (the default), this bean is never created at all, so
+ * no filter is ever added to the servlet chain - not merely a pass-through no-op - and every
+ * request succeeds regardless of what {@code X-API-KEY} it carries or omits.
  * <p>
  * The {@code finally} clearing {@link TenantContext} is mandatory, not hygiene: servlet
  * threads are pooled, so a leaked tenant would serve the next request on that thread from the
@@ -34,6 +43,7 @@ import java.io.IOException;
  * mechanisms are required.
  */
 @Component
+@ConditionalOnProperty(name = "svc.tenancy.enabled", havingValue = "true", matchIfMissing = false)
 public class TenantHeaderFilter extends OncePerRequestFilter {
 
     private static final Logger LOG = LoggerFactory.getLogger(TenantHeaderFilter.class);
@@ -71,15 +81,14 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
         }
 
         String apiKey = request.getHeader(API_KEY_HEADER);
-        String tenantId;
         if (apiKey == null || apiKey.isBlank()) {
-            tenantId = tenantInfo.getDefaultTenant();
-        } else {
-            tenantId = tenantInfo.getTenantForKey(apiKey);
-            if (tenantId == null) {
-                reject(response, "Unknown " + API_KEY_HEADER, isGraphql);
-                return;
-            }
+            reject(response, "Missing " + API_KEY_HEADER, isGraphql);
+            return;
+        }
+        String tenantId = tenantInfo.getTenantForKey(apiKey);
+        if (tenantId == null) {
+            reject(response, "Unknown " + API_KEY_HEADER, isGraphql);
+            return;
         }
 
         try {

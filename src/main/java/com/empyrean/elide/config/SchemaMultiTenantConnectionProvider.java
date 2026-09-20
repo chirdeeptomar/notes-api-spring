@@ -1,6 +1,6 @@
 package com.empyrean.elide.config;
 
-import com.empyrean.elide.tenant.TenantInfo;
+import com.empyrean.elide.tenant.TenancyStrategy;
 import org.hibernate.engine.jdbc.connections.spi.MultiTenantConnectionProvider;
 import org.springframework.stereotype.Component;
 
@@ -14,12 +14,15 @@ import java.sql.SQLException;
  * {@link com.empyrean.elide.tenant.RequestTenantResolver} only tells Hibernate <em>which</em>
  * tenant is current; on its own that resolves nothing about where a query actually runs. This
  * provider is what performs the routing: it hands out a connection scoped to the requested
- * tenant's schema via {@link Connection#setSchema(String)}, and - critically - resets that
- * schema back to the default before the connection returns to the Hikari pool. Connections are
- * pooled and reused across requests/tenants, so a schema setting that leaked past release would
- * silently serve the next borrower's queries against the wrong tenant's data. This is the same
- * class of bug as a leaked {@link com.empyrean.elide.tenant.TenantContext} ThreadLocal, just one
- * layer lower.
+ * tenant via the injected {@link TenancyStrategy}, and - critically - unscopes that connection
+ * before it returns to the Hikari pool. Connections are pooled and reused across
+ * requests/tenants, so a scoping that leaked past release would silently serve the next
+ * borrower's queries against the wrong tenant's data. This is the same class of bug as a leaked
+ * {@link com.empyrean.elide.tenant.TenantContext} ThreadLocal, just one layer lower.
+ * <p>
+ * The actual tenant-identifier-to-schema logic lives in {@link TenancyStrategy}, not here: this
+ * class's only remaining job is implementing Hibernate's SPI shape (get/release a connection,
+ * validate before scoping, unscope before release) - it holds no tenant-routing logic itself.
  * <p>
  * Registered with Hibernate by {@link HibernateTenancyConfiguration} under
  * {@code AvailableSettings.MULTI_TENANT_CONNECTION_PROVIDER}. Required in addition to the
@@ -30,13 +33,11 @@ import java.sql.SQLException;
 public class SchemaMultiTenantConnectionProvider implements MultiTenantConnectionProvider<String> {
 
     private final DataSource dataSource;
-    private final TenantInfo tenantInfo;
-    private final String defaultSchema;
+    private final TenancyStrategy tenancyStrategy;
 
-    public SchemaMultiTenantConnectionProvider(DataSource dataSource, TenantInfo tenantInfo) {
+    public SchemaMultiTenantConnectionProvider(DataSource dataSource, TenancyStrategy tenancyStrategy) {
         this.dataSource = dataSource;
-        this.tenantInfo = tenantInfo;
-        this.defaultSchema = tenantInfo.getDefaultTenant();
+        this.tenancyStrategy = tenancyStrategy;
     }
 
     /**
@@ -60,22 +61,20 @@ public class SchemaMultiTenantConnectionProvider implements MultiTenantConnectio
         // identifier hasn't been written yet. Rejecting anything outside the known set here
         // converts a future resolver/filter bug into a hard failure instead of a silent
         // fall-through to whatever arbitrary schema string happened to be passed in.
-        if (!defaultSchema.equals(tenantIdentifier) && !tenantInfo.getTenants().contains(tenantIdentifier)) {
-            throw new SQLException("Unknown tenant: " + tenantIdentifier);
-        }
+        tenancyStrategy.validateTenant(tenantIdentifier);
         Connection connection = dataSource.getConnection();
-        connection.setSchema(tenantIdentifier);
+        tenancyStrategy.scopeConnection(connection, tenantIdentifier);
         return connection;
     }
 
     @Override
     public void releaseConnection(String tenantIdentifier, Connection connection) throws SQLException {
-        // Reset before returning to the Hikari pool - see class javadoc. Wrapped in try/finally
-        // so a failure in setSchema still returns the connection to the pool instead of leaking
-        // it; a leaked connection here would otherwise never come back to Hikari, and repeated
-        // occurrences would exhaust the pool.
+        // Unscope before returning to the Hikari pool - see class javadoc. Wrapped in
+        // try/finally so a failure in unscopeConnection still returns the connection to the pool
+        // instead of leaking it; a leaked connection here would otherwise never come back to
+        // Hikari, and repeated occurrences would exhaust the pool.
         try {
-            connection.setSchema(defaultSchema);
+            tenancyStrategy.unscopeConnection(connection);
         } finally {
             connection.close();
         }

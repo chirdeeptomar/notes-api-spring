@@ -9,8 +9,12 @@ import org.hibernate.cache.jcache.internal.JCacheRegionFactory;
 import org.hibernate.cache.spi.support.DomainDataStorageAccess;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
+import org.infinispan.commons.api.CacheContainerAdmin;
+import org.infinispan.jcache.AbstractJCacheManager;
+import org.infinispan.manager.EmbeddedCacheManager;
 
 import javax.cache.Cache;
+import javax.cache.CacheManager;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -82,9 +86,10 @@ import java.util.Map;
  * {@code hibernate.search.multi_tenancy.tenant_ids}
  * in {@code application.properties} is likewise a static list. Adding a tenant
  * therefore means
- * updating three places that must stay in sync: {@code svc.tenant.*}, that
- * {@code tenant_ids} list, and {@code infinispan.xml}'s per-tenant cache
- * definitions.
+ * updating two places that must stay in sync: {@code svc.tenant.ids}/{@code svc.tenant.keys}
+ * and that {@code tenant_ids} list - see {@link #ensureCacheExists} for why
+ * {@code infinispan.xml} no longer needs a matching per-tenant entry under
+ * {@link CacheProperties.Mode#EMBEDDED}.
  *
  * <b>Registration.</b> This factory needs {@link TenantInfo} injected, so it cannot be named by
  * class in {@code hibernate.cache.region.factory_class} - Hibernate's {@code StrategySelector}
@@ -102,22 +107,19 @@ import java.util.Map;
 public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
 
     private final TenantInfo tenantInfo;
+    private final CacheProperties.Mode mode;
 
-    public TenantAwareJCacheRegionFactory(TenantInfo tenantInfo) {
+    public TenantAwareJCacheRegionFactory(TenantInfo tenantInfo, CacheProperties.Mode mode) {
         this.tenantInfo = tenantInfo;
+        this.mode = mode;
     }
 
     /**
-     * @return every tenant that can own a cache region: the key-protected tenants
-     *         plus the
-     *         default tenant, which owns no API key but is a real schema
-     *         ({@link TenantInfo#getDefaultTenant()})
+     * @return every tenant that can own a cache region. There is no default/"public" tenant
+     *         any more (see {@link TenantInfo}), so this is simply the configured tenant set.
      */
     private Iterable<String> allTenants() {
-        var tenants = new java.util.LinkedHashSet<String>();
-        tenants.add(tenantInfo.getDefaultTenant());
-        tenants.addAll(tenantInfo.getTenants());
-        return tenants;
+        return tenantInfo.getTenants();
     }
 
     @Override
@@ -127,6 +129,7 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
 
         String baseRegionName = regionConfig.getRegionName();
         SessionFactoryImplementor sessionFactory = buildingContext.getSessionFactory();
+        CacheManager cacheManager = getCacheManager();
 
         // Resolve every tenant's cache now, at bootstrap, rather than lazily on first
         // use. A
@@ -137,28 +140,81 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
         // request that happens to belong to the affected tenant.
         Map<String, Cache<Object, Object>> cachesByTenant = new LinkedHashMap<>();
         for (String tenantId : allTenants()) {
-            cachesByTenant.put(tenantId, getOrCreateCache(regionName(baseRegionName, tenantId), sessionFactory));
+            String regionName = regionName(baseRegionName, tenantId);
+            ensureCacheExists(cacheManager, regionName);
+            cachesByTenant.put(tenantId, getOrCreateCache(regionName, sessionFactory));
         }
 
-        return new TenantAwareStorageAccess(cachesByTenant, tenantInfo.getDefaultTenant());
+        return new TenantAwareStorageAccess(cachesByTenant);
+    }
+
+    /**
+     * Makes sure {@code regionName}'s cache exists before Hibernate's own
+     * {@link #getOrCreateCache} looks it up, so a tenant with no matching entry in
+     * {@code infinispan.xml} still gets a correctly bounded cache instead of one of
+     * {@code MissingCacheStrategy}'s fallbacks (an unbounded cache created on the
+     * fly, a warning, or a hard failure - see {@code JCacheRegionFactory#createCache}).
+     * <p>
+     * <b>Embedded only.</b> The JCache {@link CacheManager} handed to this factory
+     * unwraps to Infinispan's {@link EmbeddedCacheManager}, whose
+     * {@code administration()} API can create a cache from an existing template
+     * ({@code entity-region}, still declared in {@code infinispan.xml}) by name
+     * alone - which is exactly what makes the tenant list, not the XML file, the
+     * source of truth for which per-tenant caches exist. Remote mode's equivalent
+     * (an administered {@code RemoteCacheManager}) is a separate, later task; until
+     * then remote mode keeps relying on {@code infinispan/hotrod-client.properties}
+     * declaring every cache up front, so this method does nothing for it and
+     * {@link #getOrCreateCache} below falls through to Hibernate's own lookup
+     * unchanged.
+     * <p>
+     * {@code AdminFlag.VOLATILE} is required, not optional: without it, administration
+     * tries to persist the new cache's configuration to Infinispan's global state, which
+     * {@code infinispan.xml} does not enable (no {@code <global-state>} element) - and the
+     * call fails the whole boot with {@code ISPN000501} instead of creating the cache.
+     * Volatile is also the right semantics here regardless: the tenant list is re-read from
+     * {@link TenantInfo} on every boot, so nothing should be persisted across restarts.
+     * <p>
+     * The second call, into {@link AbstractJCacheManager}, is equally required and easy to
+     * miss: {@code administration()} creates the cache on the native
+     * {@link EmbeddedCacheManager} only. The JCache {@link CacheManager} wrapping it keeps its
+     * own private cache-name map, populated at construction and by JCache's own
+     * {@code getCache}/{@code createCache} calls - never by the native manager - so without
+     * this registration step Hibernate's very next line ({@link #getOrCreateCache}, which
+     * looks the region up through the JCache view) would see no cache, call
+     * {@code createCache} itself, and fail with Infinispan's "configuration already defined"
+     * error, since the native configuration this method just created is already there under
+     * the same name. {@code getOrCreateCache} here is {@link AbstractJCacheManager}'s own,
+     * distinct from the identically-named {@code JCacheRegionFactory} method below - it takes
+     * an already-built native cache and wraps it into the JCache view without redefining
+     * anything, and does nothing if that name is already registered.
+     */
+    private void ensureCacheExists(CacheManager cacheManager, String regionName) {
+        if (mode != CacheProperties.Mode.EMBEDDED) {
+            return;
+        }
+        var nativeCache = cacheManager.unwrap(EmbeddedCacheManager.class)
+                .administration()
+                .withFlags(CacheContainerAdmin.AdminFlag.VOLATILE)
+                .getOrCreateCache(regionName, "entity-region");
+        cacheManager.unwrap(AbstractJCacheManager.class).getOrCreateCache(regionName, nativeCache);
     }
 
     /**
      * Region naming: {@code <base region>.<tenant>}, e.g.
-     * {@code com.empyrean.elide.model.Note.tenant_a}. Each name must have a
-     * matching cache in
-     * {@code infinispan.xml}.
+     * {@code com.empyrean.elide.model.Note.tenant_a}. Under {@code EMBEDDED} mode this
+     * name need not appear in {@code infinispan.xml} at all - {@link #ensureCacheExists}
+     * creates it from the {@code entity-region} template. Under {@code REMOTE} mode it
+     * still must have a matching entry in {@code infinispan/hotrod-client.properties}.
      */
     private static String regionName(String baseRegionName, String tenantId) {
         return baseRegionName + "." + tenantId;
     }
 
     /**
-     * Routes each operation to the calling session's tenant cache, falling back to
-     * the default
-     * tenant when no tenant is in scope (Hibernate's own boot-time and background
-     * work, which
-     * {@code RequestTenantResolver} likewise resolves to the default tenant).
+     * Routes each operation to the calling session's tenant cache. There is no default/"public"
+     * tenant to fall back to any more (see {@link TenantInfo}); an unrecognised tenant identifier
+     * resolves to {@code null} (see {@link #cacheForTenant}) rather than to any real tenant's
+     * cache.
      * <p>
      * Per-lookup tracing logs through the <em>outer</em> class's logger deliberately. Putting
      * {@code @Slf4j} here instead names the logger
@@ -170,11 +226,9 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
     private static final class TenantAwareStorageAccess implements DomainDataStorageAccess {
 
         private final Map<String, Cache<Object, Object>> cachesByTenant;
-        private final String defaultTenant;
 
-        private TenantAwareStorageAccess(Map<String, Cache<Object, Object>> cachesByTenant, String defaultTenant) {
+        private TenantAwareStorageAccess(Map<String, Cache<Object, Object>> cachesByTenant) {
             this.cachesByTenant = cachesByTenant;
-            this.defaultTenant = defaultTenant;
         }
 
         private Cache<Object, Object> cacheFor(SharedSessionContractImplementor session) {
@@ -182,19 +236,15 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
             return cacheForTenant(tenantId);
         }
 
+        /**
+         * @return the tenant's cache, or {@code null} if {@code tenantId} is null or not a
+         *         recognised tenant. Reaching here with an unrecognised tenant means the request
+         *         never touched the database - {@code SchemaTenancyStrategy.validateTenant}
+         *         already fails hard on unknown identifiers before any query runs - so this
+         *         branch is not expected to be hit for real request traffic.
+         */
         private Cache<Object, Object> cacheForTenant(String tenantId) {
-            Cache<Object, Object> cache = tenantId == null ? null : cachesByTenant.get(tenantId);
-            if (cache != null) {
-                return cache;
-            }
-            // An unknown tenant must not silently share the default tenant's cache, but
-            // this
-            // layer is not the right place to reject it either -
-            // SchemaMultiTenantConnectionProvider
-            // already fails hard on unknown identifiers before any query runs, so reaching
-            // here
-            // with an unrecognised tenant means the request never touched the database.
-            return cachesByTenant.get(defaultTenant);
+            return tenantId == null ? null : cachesByTenant.get(tenantId);
         }
 
         @Override
@@ -210,7 +260,7 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
                 log.trace("L2 {} region={} tenant={}",
                         value != null ? "HIT" : "MISS",
                         regionNameFor(session),
-                        session == null ? defaultTenant : session.getTenantIdentifier());
+                        session == null ? "none" : session.getTenantIdentifier());
             }
             return value;
         }

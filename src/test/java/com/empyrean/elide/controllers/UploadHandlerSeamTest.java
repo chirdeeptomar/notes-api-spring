@@ -64,6 +64,7 @@ class UploadHandlerSeamTest {
     @Test
     void registeredHandlerClaimsMatchingUpload() {
         given()
+                .header("X-API-KEY", "key-a")
                 .multiPart("file", "words.txt", "one two three four".getBytes(), "text/plain")
                 .post("/api/v1/uploads")
                 .then()
@@ -75,6 +76,7 @@ class UploadHandlerSeamTest {
     @Test
     void unmatchedContentTypeStillFallsThroughToUnhandled() {
         given()
+                .header("X-API-KEY", "key-a")
                 .multiPart("file", "data.bin", new byte[] { 1, 2, 3 }, "application/octet-stream")
                 .post("/api/v1/uploads")
                 .then()

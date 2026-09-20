@@ -8,8 +8,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Pins the cache mode switch: embedded by default, remote opt-in, and each mode paired with the
- * right JCache provider class.
+ * Pins the cache mode switch: embedded by default, remote opt-in, this app's own default profile
+ * opting back into caching explicitly, and each mode paired with the right JCache provider class.
  * <p>
  * The provider pairing matters because both Infinispan JCache jars are on the classpath and each
  * registers a {@code javax.cache.spi.CachingProvider} through {@code ServiceLoader}. Selecting the
@@ -25,10 +25,22 @@ class CachePropertiesTest {
     @Autowired
     CacheProperties cacheProperties;
 
+    /**
+     * {@link CacheProperties#enabled} itself defaults to {@code false} - a deployment that never
+     * sets {@code svc.cache.enabled} gets no second-level cache at all, needing no Infinispan
+     * infrastructure. {@code application.properties} opts back in explicitly with
+     * {@code svc.cache.enabled=true}, since this sample demonstrates the caching path - which is
+     * what this, a {@code @SpringBootTest}-loaded instance, pins.
+     */
     @Test
-    void defaultsToEmbeddedAndEnabled() {
+    void appProfileEnablesCaching() {
         assertThat(cacheProperties.isEnabled()).isTrue();
         assertThat(cacheProperties.getMode()).isEqualTo(CacheProperties.Mode.EMBEDDED);
+    }
+
+    @Test
+    void frameworkDefaultIsDisabled() {
+        assertThat(new CacheProperties().isEnabled()).isFalse();
     }
 
     @Test

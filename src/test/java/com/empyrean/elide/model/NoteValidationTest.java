@@ -61,6 +61,7 @@ class NoteValidationTest {
 
     private io.restassured.response.ValidatableResponse postNote(String body, String email) {
         return given()
+                .header("X-API-KEY", "key-a")
                 .contentType(JSON_API)
                 .accept(JSON_API)
                 .body("""

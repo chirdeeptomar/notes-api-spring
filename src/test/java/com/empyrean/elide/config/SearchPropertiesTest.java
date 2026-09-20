@@ -7,13 +7,16 @@ import org.springframework.boot.test.context.SpringBootTest;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Pins the search backend switch: lucene by default and enabled.
+ * Pins the search backend switch: lucene mode, and this app's own default profile opting back
+ * into search explicitly.
  * <p>
- * {@code application.properties} deliberately declares neither {@code svc.search.enabled} nor
- * {@code svc.search.mode} - both already default to {@code true}/{@code LUCENE} on
- * {@link SearchProperties} itself, so this pins the field default directly by autowiring the
- * bean, the same way {@code CachePropertiesTest.defaultsToEmbeddedAndEnabled} does for
- * {@link CacheProperties}, rather than reading a mode out of a properties file.
+ * {@link SearchProperties#enabled} itself defaults to {@code false} - a deployment that never
+ * sets {@code svc.search.enabled} gets no search index at all (see
+ * {@code frameworkDefaultIsDisabled} below, which pins that directly against an unbound
+ * instance). {@code application.properties} opts back in explicitly with
+ * {@code svc.search.enabled=true}, since this sample demonstrates the search path - so a
+ * {@code @SpringBootTest}-loaded instance is enabled, which {@code appProfileEnablesSearch}
+ * pins.
  */
 @SpringBootTest
 class SearchPropertiesTest {
@@ -22,8 +25,13 @@ class SearchPropertiesTest {
     SearchProperties searchProperties;
 
     @Test
-    void defaultsToLuceneAndEnabled() {
+    void appProfileEnablesSearch() {
         assertThat(searchProperties.isEnabled()).isTrue();
         assertThat(searchProperties.getMode()).isEqualTo(SearchProperties.Mode.LUCENE);
+    }
+
+    @Test
+    void frameworkDefaultIsDisabled() {
+        assertThat(new SearchProperties().isEnabled()).isFalse();
     }
 }

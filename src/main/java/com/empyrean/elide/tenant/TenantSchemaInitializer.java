@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -14,11 +15,10 @@ import java.sql.Statement;
 /**
  * Creates each configured tenant's DB schema and {@code note} table at application startup.
  * <p>
- * Only covers the key-protected tenants from {@link TenantInfo#getTenants()} - the default
- * tenant's schema is not provisioned here because it must already exist before Hibernate ORM's
- * own boot-time {@code ddl-auto} runs against it, which happens earlier than any
- * {@link ApplicationRunner} can. The default tenant is therefore named after a schema that
- * already exists in a fresh database (see {@link TenantInfo#getDefaultTenant()}).
+ * Covers every configured tenant from {@link TenantInfo#getTenants()}. Hibernate ORM's own
+ * boot-time {@code ddl-auto} separately creates the {@code note} table in the JDBC connection's
+ * physical default schema (H2's {@code PUBLIC}) - that schema is not a tenant (see
+ * {@link TenantInfo}) and this initializer has no reason to touch it.
  * <p>
  * The table DDL mirrors exactly what Hibernate's {@code ddl-auto} generates for the
  * {@code Note} entity under Spring Boot's default physical naming strategy
@@ -41,6 +41,7 @@ import java.sql.Statement;
  */
 @Component
 @Order(1)
+@ConditionalOnProperty(name = "svc.tenancy.enabled", havingValue = "true", matchIfMissing = false)
 public class TenantSchemaInitializer implements ApplicationRunner {
 
     private static final Logger LOG = LoggerFactory.getLogger(TenantSchemaInitializer.class);

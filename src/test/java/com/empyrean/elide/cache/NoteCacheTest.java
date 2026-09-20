@@ -105,9 +105,6 @@ class NoteCacheTest {
         assertThat(entryCount(NOTE_REGION + ".tenant_b"))
                 .as("tenant_b did nothing at all - a shared cache would surface tenant_a's entry here")
                 .isZero();
-        assertThat(entryCount(NOTE_REGION + ".public"))
-                .as("the default tenant did nothing either")
-                .isZero();
 
         // tenant_b now writes its own row: each tenant's cache holds only its own.
         UUID idB = withTenant("tenant_b", () -> persistNote("cache b " + UUID.randomUUID()));
@@ -236,10 +233,7 @@ class NoteCacheTest {
     }
 
     private List<String> allTenantIds() {
-        List<String> tenants = new ArrayList<>();
-        tenants.add(tenantInfo.getDefaultTenant());
-        tenants.addAll(tenantInfo.getTenants());
-        return tenants;
+        return new ArrayList<>(tenantInfo.getTenants());
     }
 
     /** Counts live entries in one tenant's physical cache. */

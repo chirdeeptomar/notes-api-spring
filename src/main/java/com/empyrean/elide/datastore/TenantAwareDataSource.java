@@ -1,7 +1,7 @@
 package com.empyrean.elide.datastore;
 
+import com.empyrean.elide.tenant.TenancyStrategy;
 import com.empyrean.elide.tenant.TenantContext;
-import com.empyrean.elide.tenant.TenantInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.BeanFactory;
 
@@ -22,6 +22,15 @@ import java.util.logging.Logger;
  * participate in {@code RequestTenantResolver} on its own — this class is what makes analytic
  * queries (e.g. {@code noteStats}) honor the {@code X-API-KEY} tenant instead of always reading
  * one fixed schema.
+ * <p>
+ * Scoping itself is delegated to the injected {@link TenancyStrategy} - the same one
+ * {@code SchemaMultiTenantConnectionProvider} uses for Hibernate ORM's path - so both call sites
+ * agree on how a tenant identifier becomes an actual schema. This class deliberately does
+ * <b>not</b> call {@link TenancyStrategy#validateTenant} or
+ * {@link TenancyStrategy#unscopeConnection}, unlike {@code SchemaMultiTenantConnectionProvider}:
+ * it never validates an unknown tenant identifier, and it never explicitly resets a connection's
+ * scope before returning it to the caller. This is an existing asymmetry between the two call
+ * sites, preserved here as-is rather than unified - see {@link TenancyStrategy}'s javadoc.
  */
 @Slf4j
 public class TenantAwareDataSource implements DataSource {
@@ -30,12 +39,12 @@ public class TenantAwareDataSource implements DataSource {
     private static final String POOLED_DATA_SOURCE_BEAN = "dataSource";
 
     private final BeanFactory beanFactory;
-    private final TenantInfo tenantInfo;
+    private final TenancyStrategy tenancyStrategy;
     private volatile DataSource delegate;
 
-    public TenantAwareDataSource(BeanFactory beanFactory, TenantInfo tenantInfo) {
+    public TenantAwareDataSource(BeanFactory beanFactory, TenancyStrategy tenancyStrategy) {
         this.beanFactory = beanFactory;
-        this.tenantInfo = tenantInfo;
+        this.tenancyStrategy = tenancyStrategy;
     }
 
     /**
@@ -69,15 +78,30 @@ public class TenantAwareDataSource implements DataSource {
     }
 
     private Connection withTenantSchema(Connection connection) throws SQLException {
-        connection.setSchema(resolveTenantId());
+        tenancyStrategy.scopeConnection(connection, resolveTenantId());
         return connection;
     }
 
+    /**
+     * @throws IllegalStateException if {@link TenantContext} has no tenant set. There is no
+     *         default/"public" tenant to fall back to any more (see {@link TenantInfo}), and a
+     *         null context reaching here means {@link com.empyrean.elide.tenant.TenantHeaderFilter}'s
+     *         contract was violated upstream - it must set {@link TenantContext} to a validated
+     *         tenant for every request it lets through. Failing loudly here, at the point the
+     *         real defect is, beats letting a stale/missing context silently reach
+     *         {@link TenancyStrategy#scopeConnection}, which would fail one layer down with a
+     *         much less clear {@code SQLException}.
+     */
     private String resolveTenantId() {
         String tenantId = TenantContext.get();
-        String resolved = tenantId != null ? tenantId : tenantInfo.getDefaultTenant();
-        log.debug("resolveTenantId(): tenantContext tenantId={} -> resolved={}", tenantId, resolved);
-        return resolved;
+        if (tenantId == null) {
+            throw new IllegalStateException(
+                    "No tenant in TenantContext for a request that reached TenantAwareDataSource; "
+                            + "this indicates a bug in tenant resolution upstream (TenantHeaderFilter "
+                            + "should have rejected or scoped this request before it got here)");
+        }
+        log.debug("resolveTenantId(): tenantContext tenantId={}", tenantId);
+        return tenantId;
     }
 
     @Override

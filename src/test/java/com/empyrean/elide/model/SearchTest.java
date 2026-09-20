@@ -37,9 +37,9 @@ class SearchTest {
     void infixFindsNoteContainingTerm() {
         String marker = randomWord();
         String body = "a note about " + marker + " and nothing else";
-        createNote(null, body);
+        createNote("key-a", body);
 
-        searchInfix(null, marker)
+        searchInfix("key-a", marker)
                 .body("data.attributes.body", hasItem(body));
     }
 
@@ -47,29 +47,29 @@ class SearchTest {
     void infixExcludesNonMatchingNotes() {
         String matching = randomWord();
         String nonMatching = randomWord();
-        createNote(null, "contains " + matching);
-        createNote(null, "contains " + nonMatching);
+        createNote("key-a", "contains " + matching);
+        createNote("key-a", "contains " + nonMatching);
 
-        searchInfix(null, matching)
+        searchInfix("key-a", matching)
                 .body("data.attributes.body", hasItem("contains " + matching))
                 .body("data.attributes.body", not(hasItem("contains " + nonMatching)));
     }
 
     @Test
     void infixRejectsTermsShorterThanMinNgram() {
-        searchInfixRaw(null, "ab").statusCode(400);
+        searchInfixRaw("key-a", "ab").statusCode(400);
     }
 
     @Test
     void infixRejectsTermsLongerThanMaxNgram() {
-        searchInfixRaw(null, "toolongterm").statusCode(400);
+        searchInfixRaw("key-a", "toolongterm").statusCode(400);
     }
 
     @Test
     void prefixMatchesOnlyWhenCaseMatchesFieldValue() {
         String marker = randomWord().toUpperCase();
         String body = marker + " starts this note";
-        createNote(null, body);
+        createNote("key-a", body);
 
         searchPrefix(marker)
                 .body("data.attributes.body", hasItem(body));
@@ -87,7 +87,7 @@ class SearchTest {
         searchInfix("key-a", marker)
                 .body("data.attributes.body", hasItem(body));
 
-        searchInfix(null, marker)
+        searchInfix("key-b", marker)
                 .body("data.attributes.body", not(hasItem(body)));
     }
 
@@ -138,10 +138,10 @@ class SearchTest {
         String nonMatchingEmail = "rsql-" + UUID.randomUUID() + "@example.com";
         String matchingBody = "note for rsql smoke test " + matchingEmail;
         String nonMatchingBody = "note for rsql smoke test " + nonMatchingEmail;
-        createNoteWithEmail(null, matchingBody, matchingEmail);
-        createNoteWithEmail(null, nonMatchingBody, nonMatchingEmail);
+        createNoteWithEmail("key-a", matchingBody, matchingEmail);
+        createNoteWithEmail("key-a", nonMatchingBody, nonMatchingEmail);
 
-        searchRsql(null, "email=='" + matchingEmail + "'")
+        searchRsql("key-a", "email=='" + matchingEmail + "'")
                 .body("data.attributes.email", hasItem(matchingEmail))
                 .body("data.attributes.email", not(hasItem(nonMatchingEmail)));
     }
@@ -164,6 +164,7 @@ class SearchTest {
 
     private ValidatableResponse searchPrefix(String term) {
         return given()
+                .header("X-API-KEY", "key-a")
                 .accept(JSON_API)
                 .get(NOTES_PATH + "?filter[notes.body][prefix]=" + term)
                 .then()

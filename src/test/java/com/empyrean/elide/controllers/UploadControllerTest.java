@@ -25,6 +25,7 @@ class UploadControllerTest {
     @Test
     void acceptsAnyFileAndReportsItUnhandledByDefault() {
         given()
+                .header("X-API-KEY", "key-a")
                 .multiPart("file", "notes.txt", "hello world".getBytes(), "text/plain")
                 .post(UPLOADS_PATH)
                 .then()
@@ -37,6 +38,7 @@ class UploadControllerTest {
     @Test
     void rejectsRequestWithNoFilePart() {
         given()
+                .header("X-API-KEY", "key-a")
                 .multiPart("other", "not-the-field")
                 .post(UPLOADS_PATH)
                 .then()
@@ -46,6 +48,7 @@ class UploadControllerTest {
     @Test
     void helloEndpointIsServedAlongsideElide() {
         given()
+                .header("X-API-KEY", "key-a")
                 .get("/api/v1/hello")
                 .then()
                 .statusCode(200)

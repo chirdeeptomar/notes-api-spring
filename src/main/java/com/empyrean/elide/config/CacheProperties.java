@@ -64,10 +64,13 @@ public class CacheProperties {
     }
 
     /**
-     * Whether the second-level cache is switched on at all. When false, no region factory is
-     * registered and every read goes to the database.
+     * Whether the second-level cache is switched on at all. Off by default - a deployment that
+     * never sets {@code svc.cache.enabled} gets no second-level cache, needing no Infinispan
+     * infrastructure at all. When false, no region factory is registered and every read goes to
+     * the database. This application's own default profile opts back in explicitly (see
+     * {@code application.properties}), since the sample demonstrates the caching path.
      */
-    private boolean enabled = true;
+    private boolean enabled = false;
 
     /** Where Infinispan runs. Defaults to {@link Mode#EMBEDDED}. */
     private Mode mode = Mode.EMBEDDED;
