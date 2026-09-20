@@ -20,8 +20,6 @@ datafaker = "2.7.0"
 # this project is on Spring Boot 4.
 springdoc = "3.1.1"
 
-# Spring Boot's BOM does not manage rest-assured (Quarkus's does, which is why the source project
-# can omit the version).
 restAssured = "5.5.2"
 
 # Spring Boot 4.1's BOM imports the Groovy 5 platform, which upgrades rest-assured's declared
@@ -41,12 +39,25 @@ groovy = "4.0.22"
 # it "provided" so Hibernate's copy is the one on the classpath.
 infinispan = "16.1.4"
 
+# elide-datastore-search pulls hibernate-search-mapper-orm and hibernate-search-backend-lucene
+# in transitively at this version (from Elide's own parent POM), but declares no version property
+# of its own to reference - pinned here explicitly because the Elasticsearch backend below is a
+# sibling artifact that must match it exactly.
+hibernateSearch = "8.4.0.Final"
+
 [libraries]
 # Brings in spring-boot-starter-web and spring-boot-starter-data-jpa transitively.
 elide-spring-boot-starter = { module = "com.yahoo.elide:elide-spring-boot-starter", version.ref = "elide" }
 # Brings in hibernate-search-mapper-orm and hibernate-search-backend-lucene transitively.
 elide-datastore-search = { module = "com.yahoo.elide:elide-datastore-search", version.ref = "elide" }
 elide-test-helpers = { module = "com.yahoo.elide:elide-test-helpers", version.ref = "elide" }
+
+# notes.search.mode=opensearch|elasticsearch. Same artifact serves both: Hibernate Search tells
+# them apart purely via the hibernate.search.backend.version property (an "opensearch:" prefix vs
+# a bare version string), since OpenSearch's own version numbers diverged from Elasticsearch's
+# after the 2021 fork. Shipped alongside the Lucene backend so the mode is a config switch rather
+# than a rebuild.
+hibernate-search-backend-elasticsearch = { module = "org.hibernate.search:hibernate-search-backend-elasticsearch", version.ref = "hibernateSearch" }
 
 # Version-less: managed by the Spring Boot BOM.
 spring-boot-starter-validation = { module = "org.springframework.boot:spring-boot-starter-validation" }

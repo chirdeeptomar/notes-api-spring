@@ -10,21 +10,21 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Owns the tenant-to-API-key mapping configured under {@code notes.tenant.*} (each property
+ * Owns the tenant-to-API-key mapping configured under {@code svc.tenant.*} (each property
  * name after the prefix is a tenant name; its value is that tenant's API key), plus the
  * identity of the default tenant that needs no key.
  * <p>
  * The default tenant ({@link #getDefaultTenant()}) is deliberately not part of
- * {@code notes.tenant.*} - it is not reachable by any key, only by omitting the
+ * {@code svc.tenant.*} - it is not reachable by any key, only by omitting the
  * {@code X-API-KEY} header.
  */
 @Component
-@ConfigurationProperties(prefix = "notes")
+@ConfigurationProperties(prefix = "svc")
 public class TenantInfo {
 
     private static final String DEFAULT_TENANT = "public";
 
-    /** Bound from {@code notes.tenant.<name>=<key>}. */
+    /** Bound from {@code svc.tenant.<name>=<key>}. */
     private Map<String, String> tenant = new LinkedHashMap<>();
 
     private Map<String, String> keyToTenant;

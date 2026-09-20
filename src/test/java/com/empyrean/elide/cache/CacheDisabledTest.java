@@ -15,7 +15,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Verifies {@code notes.cache.enabled=false} actually turns the second-level cache off, rather
+ * Verifies {@code svc.cache.enabled=false} actually turns the second-level cache off, rather
  * than leaving it on with an empty configuration.
  * <p>
  * Worth its own context because the disabled branch is the one that runs when someone is
@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * would send them chasing the wrong cause.
  */
 @SpringBootTest(properties = {
-        "notes.cache.enabled=false",
+        "svc.cache.enabled=false",
         "spring.jpa.properties.hibernate.generate_statistics=true"
 })
 class CacheDisabledTest {

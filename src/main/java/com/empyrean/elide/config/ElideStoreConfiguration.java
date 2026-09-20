@@ -108,10 +108,21 @@ import java.util.ListIterator;
 @Configuration
 public class ElideStoreConfiguration {
 
+    /**
+     * Skips the replacement entirely when {@code svc.search.enabled=false}, leaving every
+     * {@link JpaDataStore} in place so {@code Note} is served by plain JPA. See
+     * {@link SearchProperties#isEnabled()} for what does and does not change for API consumers
+     * when this is off.
+     */
     @Bean
     @Order(2)
-    public DataStoreBuilderCustomizer searchStoreCustomizer(EntityManagerFactory entityManagerFactory) {
-        return builder -> builder.dataStores(dataStores -> replaceJpaStoresWithSearchStores(dataStores, entityManagerFactory));
+    public DataStoreBuilderCustomizer searchStoreCustomizer(EntityManagerFactory entityManagerFactory,
+            SearchProperties searchProperties) {
+        return builder -> {
+            if (searchProperties.isEnabled()) {
+                builder.dataStores(dataStores -> replaceJpaStoresWithSearchStores(dataStores, entityManagerFactory));
+            }
+        };
     }
 
     /**

@@ -16,8 +16,7 @@ import static org.hamcrest.Matchers.notNullValue;
  * There are two documents and they are deliberately different. Elide serves {@code /api-docs}
  * itself, containing only its generated entity paths, relative to a server URL of
  * {@code /api/v1}. springdoc serves {@code /v3/api-docs}, which is the one that carries the
- * hand-written {@code @RestController}s - it is what preserves the Quarkus original's property
- * that a new resource is documented just by existing.
+ * hand-written {@code @RestController}s, so a new resource is documented just by existing.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ApiDocsTest {

@@ -19,6 +19,11 @@ dependencies {
     implementation(libs.elide.spring.boot.starter)
     implementation(libs.elide.datastore.search)
 
+    // notes.search.mode=opensearch|elasticsearch. The Lucene backend (transitive via
+    // elide-datastore-search above) stays on the classpath too, since mode=lucene is the default;
+    // only hibernate.search.backend.type picks which one actually activates.
+    implementation(libs.hibernate.search.backend.elasticsearch)
+
     // Declared explicitly although also reachable transitively: Note.java compiles against
     // jakarta.validation annotations directly, so it should not depend on a transitive path.
     implementation(libs.spring.boot.starter.validation)

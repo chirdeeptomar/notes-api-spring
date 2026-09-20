@@ -51,12 +51,12 @@ public class HibernateTenancyConfiguration {
      * are registered this way.
      * <p>
      * The provider class and config URI are set here rather than in
-     * {@code application.properties} because both must follow {@code notes.cache.mode}: embedded
+     * {@code application.properties} because both must follow {@code svc.cache.mode}: embedded
      * and remote need different provider classes and different config formats, and setting them
      * statically would let the two disagree. The region factory itself is mode-agnostic - it
      * works against the JCache {@code CacheManager}, so tenant scoping is identical either way.
      * <p>
-     * When {@code notes.cache.enabled} is false this contributes nothing, leaving Hibernate's
+     * When {@code svc.cache.enabled} is false this contributes nothing, leaving Hibernate's
      * second-level cache off and every read going to the database.
      */
     @Bean

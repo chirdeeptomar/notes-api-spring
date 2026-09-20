@@ -4,7 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * Selects how Infinispan backs Hibernate's second-level cache, under {@code notes.cache.*}.
+ * Selects how Infinispan backs Hibernate's second-level cache, under {@code svc.cache.*}.
  * <p>
  * The two modes differ in where the cache lives, not in how it is keyed - tenant scoping is
  * identical either way, because {@link TenantAwareJCacheRegionFactory} works against the JCache
@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
  * @see Mode
  */
 @Component
-@ConfigurationProperties(prefix = "notes.cache")
+@ConfigurationProperties(prefix = "svc.cache")
 public class CacheProperties {
 
     /**
@@ -38,7 +38,7 @@ public class CacheProperties {
          * every cache read, a server to operate, and a marshalling contract on every cached
          * entity (entries are serialized to leave the JVM).
          */
-        REMOTE("org.infinispan.jcache.remote.JCachingProvider", "hotrod-client.properties");
+        REMOTE("org.infinispan.jcache.remote.JCachingProvider", "infinispan/hotrod-client.properties");
 
         private final String cachingProvider;
         private final String defaultConfigUri;
@@ -74,7 +74,8 @@ public class CacheProperties {
 
     /**
      * Cache configuration resource, overriding the mode's default
-     * ({@code infinispan.xml} for embedded, {@code hotrod-client.properties} for remote).
+     * ({@code infinispan.xml} for embedded, {@code infinispan/hotrod-client.properties} for
+     * remote).
      */
     private String configUri;
 

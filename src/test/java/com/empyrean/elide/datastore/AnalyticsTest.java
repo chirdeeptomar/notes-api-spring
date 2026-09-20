@@ -16,10 +16,6 @@ import static org.hamcrest.Matchers.not;
 /**
  * Verifies the HJSON-defined {@code noteStats} aggregation table resolves from the classpath and
  * serves tenant-scoped counts grouped by author email.
- * <p>
- * Replaces the source project's {@code AnalyticsConfigPathTest}, which tested a Quarkus
- * classloader workaround that has no equivalent here - the coverage that matters is that the
- * config resolves and the data is correctly scoped, which is asserted end to end instead.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class AnalyticsTest {

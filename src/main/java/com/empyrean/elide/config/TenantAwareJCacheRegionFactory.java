@@ -82,7 +82,7 @@ import java.util.Map;
  * {@code hibernate.search.multi_tenancy.tenant_ids}
  * in {@code application.properties} is likewise a static list. Adding a tenant
  * therefore means
- * updating three places that must stay in sync: {@code notes.tenant.*}, that
+ * updating three places that must stay in sync: {@code svc.tenant.*}, that
  * {@code tenant_ids} list, and {@code infinispan.xml}'s per-tenant cache
  * definitions.
  *

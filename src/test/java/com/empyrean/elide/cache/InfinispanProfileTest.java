@@ -24,9 +24,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class InfinispanProfileTest {
 
+    /**
+     * {@code application.properties} deliberately does not declare {@code svc.cache.mode}, so
+     * this pins {@link CacheProperties}' own field default instead of reading it out of a
+     * properties file - see the class's own default and
+     * {@code application.properties}' comment explaining why the line is absent.
+     */
     @Test
     void defaultConfigurationShipsEmbedded() {
-        assertThat(modeDeclaredIn("application.properties"))
+        assertThat(new CacheProperties().getMode())
                 .as("the checked-in default must stay embedded - remote needs infrastructure")
                 .isEqualTo(CacheProperties.Mode.EMBEDDED);
     }
@@ -38,7 +44,7 @@ class InfinispanProfileTest {
     }
 
     /**
-     * Reads {@code notes.cache.mode} out of one properties file, binding it the way Spring would
+     * Reads {@code svc.cache.mode} out of one properties file, binding it the way Spring would
      * so an invalid enum value fails here rather than at startup.
      */
     private CacheProperties.Mode modeDeclaredIn(String resource) {
@@ -51,8 +57,8 @@ class InfinispanProfileTest {
             sources.forEach(source -> environment.getPropertySources().addLast(source));
 
             return Binder.get(environment)
-                    .bind("notes.cache.mode", CacheProperties.Mode.class)
-                    .orElseThrow(() -> new AssertionError("notes.cache.mode not declared in " + resource));
+                    .bind("svc.cache.mode", CacheProperties.Mode.class)
+                    .orElseThrow(() -> new AssertionError("svc.cache.mode not declared in " + resource));
         } catch (IOException e) {
             throw new AssertionError("could not read " + resource, e);
         }

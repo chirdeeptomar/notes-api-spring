@@ -46,7 +46,7 @@ class CachePropertiesTest {
         props.setMode(CacheProperties.Mode.REMOTE);
 
         assertThat(props.cachingProvider()).isEqualTo(REMOTE_PROVIDER);
-        assertThat(props.resolvedConfigUri()).isEqualTo("hotrod-client.properties");
+        assertThat(props.resolvedConfigUri()).isEqualTo("infinispan/hotrod-client.properties");
     }
 
     @Test
@@ -68,7 +68,7 @@ class CachePropertiesTest {
         props.setMode(CacheProperties.Mode.REMOTE);
         props.setConfigUri("   ");
 
-        assertThat(props.resolvedConfigUri()).isEqualTo("hotrod-client.properties");
+        assertThat(props.resolvedConfigUri()).isEqualTo("infinispan/hotrod-client.properties");
     }
 
     /**
