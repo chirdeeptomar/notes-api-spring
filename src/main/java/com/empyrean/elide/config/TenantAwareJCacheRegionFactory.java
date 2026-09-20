@@ -9,8 +9,12 @@ import org.hibernate.cache.jcache.internal.JCacheRegionFactory;
 import org.hibernate.cache.spi.support.DomainDataStorageAccess;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
+import org.infinispan.commons.api.CacheContainerAdmin;
+import org.infinispan.jcache.AbstractJCacheManager;
+import org.infinispan.manager.EmbeddedCacheManager;
 
 import javax.cache.Cache;
+import javax.cache.CacheManager;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -82,9 +86,10 @@ import java.util.Map;
  * {@code hibernate.search.multi_tenancy.tenant_ids}
  * in {@code application.properties} is likewise a static list. Adding a tenant
  * therefore means
- * updating three places that must stay in sync: {@code svc.tenant.*}, that
- * {@code tenant_ids} list, and {@code infinispan.xml}'s per-tenant cache
- * definitions.
+ * updating two places that must stay in sync: {@code svc.tenant.*} and that
+ * {@code tenant_ids} list - see {@link #ensureCacheExists} for why
+ * {@code infinispan.xml} no longer needs a matching per-tenant entry under
+ * {@link CacheProperties.Mode#EMBEDDED}.
  *
  * <b>Registration.</b> This factory needs {@link TenantInfo} injected, so it cannot be named by
  * class in {@code hibernate.cache.region.factory_class} - Hibernate's {@code StrategySelector}
@@ -102,9 +107,11 @@ import java.util.Map;
 public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
 
     private final TenantInfo tenantInfo;
+    private final CacheProperties.Mode mode;
 
-    public TenantAwareJCacheRegionFactory(TenantInfo tenantInfo) {
+    public TenantAwareJCacheRegionFactory(TenantInfo tenantInfo, CacheProperties.Mode mode) {
         this.tenantInfo = tenantInfo;
+        this.mode = mode;
     }
 
     /**
@@ -127,6 +134,7 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
 
         String baseRegionName = regionConfig.getRegionName();
         SessionFactoryImplementor sessionFactory = buildingContext.getSessionFactory();
+        CacheManager cacheManager = getCacheManager();
 
         // Resolve every tenant's cache now, at bootstrap, rather than lazily on first
         // use. A
@@ -137,17 +145,71 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
         // request that happens to belong to the affected tenant.
         Map<String, Cache<Object, Object>> cachesByTenant = new LinkedHashMap<>();
         for (String tenantId : allTenants()) {
-            cachesByTenant.put(tenantId, getOrCreateCache(regionName(baseRegionName, tenantId), sessionFactory));
+            String regionName = regionName(baseRegionName, tenantId);
+            ensureCacheExists(cacheManager, regionName);
+            cachesByTenant.put(tenantId, getOrCreateCache(regionName, sessionFactory));
         }
 
         return new TenantAwareStorageAccess(cachesByTenant, tenantInfo.getDefaultTenant());
     }
 
     /**
+     * Makes sure {@code regionName}'s cache exists before Hibernate's own
+     * {@link #getOrCreateCache} looks it up, so a tenant with no matching entry in
+     * {@code infinispan.xml} still gets a correctly bounded cache instead of one of
+     * {@code MissingCacheStrategy}'s fallbacks (an unbounded cache created on the
+     * fly, a warning, or a hard failure - see {@code JCacheRegionFactory#createCache}).
+     * <p>
+     * <b>Embedded only.</b> The JCache {@link CacheManager} handed to this factory
+     * unwraps to Infinispan's {@link EmbeddedCacheManager}, whose
+     * {@code administration()} API can create a cache from an existing template
+     * ({@code entity-region}, still declared in {@code infinispan.xml}) by name
+     * alone - which is exactly what makes the tenant list, not the XML file, the
+     * source of truth for which per-tenant caches exist. Remote mode's equivalent
+     * (an administered {@code RemoteCacheManager}) is a separate, later task; until
+     * then remote mode keeps relying on {@code infinispan/hotrod-client.properties}
+     * declaring every cache up front, so this method does nothing for it and
+     * {@link #getOrCreateCache} below falls through to Hibernate's own lookup
+     * unchanged.
+     * <p>
+     * {@code AdminFlag.VOLATILE} is required, not optional: without it, administration
+     * tries to persist the new cache's configuration to Infinispan's global state, which
+     * {@code infinispan.xml} does not enable (no {@code <global-state>} element) - and the
+     * call fails the whole boot with {@code ISPN000501} instead of creating the cache.
+     * Volatile is also the right semantics here regardless: the tenant list is re-read from
+     * {@link TenantInfo} on every boot, so nothing should be persisted across restarts.
+     * <p>
+     * The second call, into {@link AbstractJCacheManager}, is equally required and easy to
+     * miss: {@code administration()} creates the cache on the native
+     * {@link EmbeddedCacheManager} only. The JCache {@link CacheManager} wrapping it keeps its
+     * own private cache-name map, populated at construction and by JCache's own
+     * {@code getCache}/{@code createCache} calls - never by the native manager - so without
+     * this registration step Hibernate's very next line ({@link #getOrCreateCache}, which
+     * looks the region up through the JCache view) would see no cache, call
+     * {@code createCache} itself, and fail with Infinispan's "configuration already defined"
+     * error, since the native configuration this method just created is already there under
+     * the same name. {@code getOrCreateCache} here is {@link AbstractJCacheManager}'s own,
+     * distinct from the identically-named {@code JCacheRegionFactory} method below - it takes
+     * an already-built native cache and wraps it into the JCache view without redefining
+     * anything, and does nothing if that name is already registered.
+     */
+    private void ensureCacheExists(CacheManager cacheManager, String regionName) {
+        if (mode != CacheProperties.Mode.EMBEDDED) {
+            return;
+        }
+        var nativeCache = cacheManager.unwrap(EmbeddedCacheManager.class)
+                .administration()
+                .withFlags(CacheContainerAdmin.AdminFlag.VOLATILE)
+                .getOrCreateCache(regionName, "entity-region");
+        cacheManager.unwrap(AbstractJCacheManager.class).getOrCreateCache(regionName, nativeCache);
+    }
+
+    /**
      * Region naming: {@code <base region>.<tenant>}, e.g.
-     * {@code com.empyrean.elide.model.Note.tenant_a}. Each name must have a
-     * matching cache in
-     * {@code infinispan.xml}.
+     * {@code com.empyrean.elide.model.Note.tenant_a}. Under {@code EMBEDDED} mode this
+     * name need not appear in {@code infinispan.xml} at all - {@link #ensureCacheExists}
+     * creates it from the {@code entity-region} template. Under {@code REMOTE} mode it
+     * still must have a matching entry in {@code infinispan/hotrod-client.properties}.
      */
     private static String regionName(String baseRegionName, String tenantId) {
         return baseRegionName + "." + tenantId;

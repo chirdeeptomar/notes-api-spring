@@ -53,8 +53,11 @@ public class HibernateTenancyConfiguration {
      * The provider class and config URI are set here rather than in
      * {@code application.properties} because both must follow {@code svc.cache.mode}: embedded
      * and remote need different provider classes and different config formats, and setting them
-     * statically would let the two disagree. The region factory itself is mode-agnostic - it
-     * works against the JCache {@code CacheManager}, so tenant scoping is identical either way.
+     * statically would let the two disagree. The mode is also passed into the region factory
+     * itself, alongside {@code TenantInfo} - not because tenant scoping differs (it works against
+     * the JCache {@code CacheManager}, so that part is identical either way), but because only
+     * embedded mode can create a tenant's cache on the fly from a template; see
+     * {@code TenantAwareJCacheRegionFactory#ensureCacheExists}.
      * <p>
      * When {@code svc.cache.enabled} is false this contributes nothing, leaving Hibernate's
      * second-level cache off and every read going to the database.
@@ -69,7 +72,7 @@ public class HibernateTenancyConfiguration {
             }
             props.put(AvailableSettings.USE_SECOND_LEVEL_CACHE, "true");
             props.put(AvailableSettings.CACHE_REGION_FACTORY,
-                    new TenantAwareJCacheRegionFactory(tenantInfo));
+                    new TenantAwareJCacheRegionFactory(tenantInfo, cacheProperties.getMode()));
             props.put(ConfigSettings.PROVIDER, cacheProperties.cachingProvider());
             props.put(ConfigSettings.CONFIG_URI, cacheProperties.resolvedConfigUri());
         };
