@@ -152,4 +152,64 @@ public class HibernateTenancyConfiguration {
             props.put("hibernate.search.multi_tenancy.tenant_ids", tenantIds);
         };
     }
+
+    /**
+     * Sets every {@code hibernate.search.backend.*} property from {@link SearchProperties},
+     * branching on {@link SearchProperties#getMode()} - the same reason
+     * {@link #cacheRegionFactoryCustomizer} sets {@code CacheProperties}' provider/URI here
+     * rather than statically: a single {@code svc.search.mode} switch has to change several
+     * dependent properties together (backend type, host, credentials, version) without a static
+     * {@code application.properties} entry and this switch ever disagreeing. Previously this was
+     * split across three static {@code application*.properties} files
+     * ({@code application-opensearch.properties}, {@code application-elasticsearch.properties})
+     * that each hardcoded {@code backend.type=elasticsearch} and only really varied
+     * {@code backend.version}'s prefix - collapsing that into one property-driven customizer is
+     * what makes {@code SVC_SEARCH_MODE=opensearch} alone sufficient, mirroring how
+     * {@code SVC_CACHE_MODE=remote} alone is already sufficient for caching.
+     * <p>
+     * Runs regardless of {@code svc.search.enabled}, unlike every other customizer in this
+     * class: Hibernate Search's own bootstrap is driven by {@code Note}'s {@code @Indexed}
+     * annotation, at the ORM level, independently of whether
+     * {@link com.empyrean.elide.config.ElideStoreConfiguration} chooses to wrap {@code Note} in
+     * a {@code SearchDataStore} - {@code svc.search.enabled} only controls the latter. Without
+     * {@code hibernate.search.backend.type} set, Hibernate Search's own bootstrap fails outright
+     * with {@code HSEARCH000582: Ambiguous backend type} (both the Lucene and Elasticsearch
+     * backend jars are on the classpath) even with search "disabled" - so this must contribute
+     * the backend type unconditionally, the same as the static
+     * {@code hibernate.search.backend.type=lucene} property this customizer replaced.
+     * <p>
+     * {@code directory.type} is the one Lucene setting set with {@code putIfAbsent}, not
+     * {@code put}: {@code build.gradle}'s {@code test} task forces it to {@code local-heap} via a
+     * JVM system property (an in-memory directory with no file lock, avoiding write.lock
+     * contention between {@code @SpringBootTest} contexts that otherwise share one
+     * {@code build/lucene-indexes/Note} directory on disk). A plain {@code put} here would
+     * unconditionally overwrite that system property's value - {@code HibernatePropertiesCustomizer}
+     * mutates the already-precedence-resolved properties map, so it always wins over whatever
+     * property source contributed the map's current value, unlike a static
+     * {@code application.properties} entry which the system property could still outrank.
+     * {@code putIfAbsent} preserves that override while still supplying the same default outside
+     * tests.
+     */
+    @Bean
+    HibernatePropertiesCustomizer searchBackendCustomizer(SearchProperties searchProperties) {
+        return props -> {
+            switch (searchProperties.getMode()) {
+                case LUCENE -> {
+                    props.put("hibernate.search.backend.type", "lucene");
+                    props.putIfAbsent("hibernate.search.backend.directory.type", "local-filesystem");
+                    props.put("hibernate.search.backend.directory.root", searchProperties.getIndexPath());
+                }
+                case OPENSEARCH, ELASTICSEARCH -> {
+                    props.put("hibernate.search.backend.type", "elasticsearch");
+                    props.put("hibernate.search.backend.hosts", searchProperties.getHosts());
+                    props.put("hibernate.search.backend.protocol", searchProperties.getProtocol());
+                    props.put("hibernate.search.backend.username", searchProperties.getUsername());
+                    props.put("hibernate.search.backend.password", searchProperties.getPassword());
+                    props.put("hibernate.search.backend.version", searchProperties.resolvedBackendVersion());
+                    props.put("hibernate.search.backend.version_check.enabled",
+                            String.valueOf(searchProperties.isVersionCheckEnabled()));
+                }
+            }
+        };
+    }
 }

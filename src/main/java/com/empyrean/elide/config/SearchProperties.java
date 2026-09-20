@@ -5,15 +5,17 @@ import org.springframework.stereotype.Component;
 
 /**
  * Selects which Hibernate Search backend serves full-text search on {@code Note.body}, under
- * {@code svc.search.mode}.
+ * {@code svc.search.mode}, and holds the remote backends' connection details.
  * <p>
- * Binding this rather than reading {@code hibernate.search.backend.type} directly gives a
- * validated startup failure on an unrecognized mode instead of a silently-ignored property, and
- * gives the rest of the app (logging, diagnostics) a single source of truth for which mode is
- * active. The actual backend wiring for {@link Mode#OPENSEARCH} and {@link Mode#ELASTICSEARCH}
- * lives entirely in {@code application-opensearch.properties} /
- * {@code application-elasticsearch.properties} - this class does not configure Hibernate Search
- * itself.
+ * Binding this rather than reading {@code hibernate.search.backend.*} directly gives a validated
+ * startup failure on an unrecognized mode instead of a silently-ignored property, and gives the
+ * rest of the app (logging, diagnostics) a single source of truth for which mode is active. The
+ * actual {@code hibernate.search.backend.*} properties for every mode are set programmatically
+ * from this class by {@code HibernateTenancyConfiguration.searchBackendCustomizer} - not
+ * statically in {@code application.properties} - the same reason {@link CacheProperties}' mode
+ * drives {@code ConfigSettings.PROVIDER}/{@code CONFIG_URI} there instead of a static property:
+ * a single {@code svc.search.mode} switch has to change several dependent properties together
+ * (backend type, host, credentials, version) without the two ever disagreeing.
  *
  * @see Mode
  */
@@ -40,9 +42,9 @@ public class SearchProperties {
 
         /**
          * Hibernate Search indexes to a remote OpenSearch cluster via its Elasticsearch backend
-         * (the same artifact serves both distributions; see
-         * {@code application-opensearch.properties} for the {@code hibernate.search.backend.version}
-         * {@code opensearch:} prefix that tells them apart).
+         * (the same artifact serves both distributions - Hibernate Search tells them apart
+         * purely via {@code backend.version}'s {@code opensearch:} prefix, since OpenSearch's
+         * version numbers diverged from Elasticsearch's after the 2021 fork).
          */
         OPENSEARCH,
 
@@ -72,6 +74,48 @@ public class SearchProperties {
     /** Which backend indexes {@code Note.body}. Defaults to {@link Mode#LUCENE}. */
     private Mode mode = Mode.LUCENE;
 
+    /**
+     * Local filesystem directory for the Lucene backend's indexes. Ignored by
+     * {@link Mode#OPENSEARCH}/{@link Mode#ELASTICSEARCH}.
+     */
+    private String indexPath = "build/lucene-indexes";
+
+    /**
+     * {@code host:port} pairs for the remote cluster ({@link Mode#OPENSEARCH}/
+     * {@link Mode#ELASTICSEARCH} only). Comma-separated for more than one node.
+     */
+    private String hosts = "localhost:9200";
+
+    /** {@code http} or {@code https}, for the remote cluster connection. */
+    private String protocol = "http";
+
+    /** Basic auth username for the remote cluster, or blank for none. */
+    private String username = "";
+
+    /** Basic auth password for the remote cluster, or blank for none. */
+    private String password = "";
+
+    /**
+     * The remote cluster's version, as Hibernate Search's Elasticsearch backend expects it: a
+     * bare major version (e.g. {@code "9"}) for {@link Mode#ELASTICSEARCH}, or the same string
+     * prefixed with {@code opensearch:} for {@link Mode#OPENSEARCH} (e.g.
+     * {@code "opensearch:2"}) - {@code HibernateTenancyConfiguration.searchBackendCustomizer}
+     * adds that prefix automatically for {@link Mode#OPENSEARCH}, so this field itself never
+     * carries it. A trailing {@code .x} (e.g. {@code "9.x"}) looks natural but is rejected -
+     * Hibernate Search parses this into an {@code ElasticsearchVersion} and only accepts
+     * {@code x.y.z-qualifier}, {@code <distribution>:x.y.z-qualifier}, or a bare distribution
+     * name; an incomplete numeric version (just {@code "9"}, no minor/patch) is fine, a literal
+     * {@code x} placeholder is not.
+     */
+    private String version = "9";
+
+    /**
+     * Escape hatch for a managed cluster that reports a version string outside Hibernate
+     * Search's officially tested range: disables its startup validation of the live cluster's
+     * reported version against {@link #version}.
+     */
+    private boolean versionCheckEnabled = true;
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -86,5 +130,70 @@ public class SearchProperties {
 
     public void setMode(Mode mode) {
         this.mode = mode;
+    }
+
+    public String getIndexPath() {
+        return indexPath;
+    }
+
+    public void setIndexPath(String indexPath) {
+        this.indexPath = indexPath;
+    }
+
+    public String getHosts() {
+        return hosts;
+    }
+
+    public void setHosts(String hosts) {
+        this.hosts = hosts;
+    }
+
+    public String getProtocol() {
+        return protocol;
+    }
+
+    public void setProtocol(String protocol) {
+        this.protocol = protocol;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
+    }
+
+    public String getVersion() {
+        return version;
+    }
+
+    public void setVersion(String version) {
+        this.version = version;
+    }
+
+    public boolean isVersionCheckEnabled() {
+        return versionCheckEnabled;
+    }
+
+    public void setVersionCheckEnabled(boolean versionCheckEnabled) {
+        this.versionCheckEnabled = versionCheckEnabled;
+    }
+
+    /**
+     * @return the {@code hibernate.search.backend.version} value for the current mode - {@code
+     *         version}, prefixed with {@code opensearch:} for {@link Mode#OPENSEARCH}. Not
+     *         meaningful for {@link Mode#LUCENE}, which has no such property.
+     */
+    public String resolvedBackendVersion() {
+        return mode == Mode.OPENSEARCH ? "opensearch:" + version : version;
     }
 }
