@@ -57,6 +57,7 @@ class NoteGraphQLCrudTest {
                 String id = createNote("original body", "original@example.com");
 
                 given()
+                                .header("X-API-KEY", "key-a")
                                 .contentType(JSON)
                                 .accept(JSON)
                                 .body("""
@@ -78,6 +79,7 @@ class NoteGraphQLCrudTest {
                 String id = createNote("note to delete", "delete@example.com");
 
                 given()
+                                .header("X-API-KEY", "key-a")
                                 .contentType(JSON)
                                 .accept(JSON)
                                 .body("""
@@ -97,6 +99,7 @@ class NoteGraphQLCrudTest {
 
         private String createNote(String body, String email) {
                 ValidatableResponse response = given()
+                                .header("X-API-KEY", "key-a")
                                 .contentType(JSON)
                                 .accept(JSON)
                                 .body("""
@@ -119,6 +122,7 @@ class NoteGraphQLCrudTest {
 
         private ValidatableResponse fetchByIdRaw(String id) {
                 return given()
+                                .header("X-API-KEY", "key-a")
                                 .contentType(JSON)
                                 .accept(JSON)
                                 .body("""

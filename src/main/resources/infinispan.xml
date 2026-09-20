@@ -28,7 +28,12 @@
 
   ADDING AN ENTITY: add a <cache-template> for it, sized for its own working set. One cache per
   (entity, tenant) is still created automatically from that template - no per-tenant declaration
-  needed here either.
+  needed here either. When svc.tenancy.enabled=false, also declare that entity's bare-named cache
+  below (see "com.empyrean.elide.model.Note" below the template) - TenantAwareJCacheRegionFactory
+  is not registered in that mode, so nothing creates the cache programmatically, and an
+  undeclared region falls through to Hibernate/Infinispan's MissingCacheStrategy default
+  (auto-create an unbounded, non-invalidation cache with a different marshalling posture than the
+  template - see NOTE_REGION comment below for what that actually broke).
 -->
 <infinispan xmlns="urn:infinispan:config:16.1"
             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -54,6 +59,25 @@
             <memory max-count="10000"/>
             <expiration max-idle="1800000" interval="60000"/>
         </invalidation-cache-configuration>
+
+        <!--
+          NOTE_REGION (svc.tenancy.enabled=false only). Same bounded/invalidation shape as
+          entity-region above, declared under Note's bare FQCN because that is the literal region
+          name Hibernate's plain default region factory uses when there is no tenant to suffix it
+          with (TenantAwareJCacheRegionFactory, which creates the per-tenant caches
+          programmatically from the entity-region template, is not registered in that mode - see
+          HibernateTenancyConfiguration.cacheRegionFactoryCustomizer). Leaving this region
+          undeclared let MissingCacheStrategy auto-create a default cache instead, which failed
+          every second-level cache read with "ISPN000615: Unable to unmarshall
+          'org.hibernate.cache.internal.BasicCacheKeyImplementation'" - the auto-created cache's
+          default marshalling does not know Hibernate's cache-key classes, unlike a declared
+          cache using this container's own configuration. Add one such cache per indexed entity
+          if more are added while tenancy can be disabled.
+        -->
+        <invalidation-cache name="com.empyrean.elide.model.Note" mode="SYNC" statistics="true">
+            <memory max-count="10000"/>
+            <expiration max-idle="1800000" interval="60000"/>
+        </invalidation-cache>
 
         <!--
           Hibernate's internal regions. These are NOT per-tenant: they are keyed by table name and

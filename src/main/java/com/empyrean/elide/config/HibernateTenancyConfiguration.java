@@ -9,6 +9,8 @@ import org.springframework.boot.hibernate.autoconfigure.HibernatePropertiesCusto
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.Optional;
+
 /**
  * Registers {@link RequestTenantResolver} and {@link SchemaMultiTenantConnectionProvider} as
  * Hibernate's current-tenant resolver and multi-tenant connection provider, respectively.
@@ -27,12 +29,30 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class HibernateTenancyConfiguration {
 
+    /**
+     * When {@code svc.tenancy.enabled=false}, contributes neither
+     * {@code MULTI_TENANT_IDENTIFIER_RESOLVER} nor {@code MULTI_TENANT_CONNECTION_PROVIDER} -
+     * this is what actually removes Hibernate's multi-tenancy SPI. Hibernate 7 enables
+     * multi-tenancy purely by presence: {@code MultiTenancy.isMultiTenancyEnabled} just checks
+     * whether a {@code MultiTenantConnectionProvider} service was registered, so withholding
+     * both properties here is mechanically complete on its own - there is no separate "set the
+     * strategy to NONE" step needed (Hibernate 7 has no such enum-typed setting any more).
+     * <p>
+     * {@code resolver} is {@code Optional} because {@link RequestTenantResolver} itself is now
+     * conditionally registered (see its javadoc for why that bean-level gate, not just this
+     * customizer, is what actually keeps Hibernate from picking it up when tenancy is disabled).
+     * When disabled, the {@code Optional} is empty and this method never touches it.
+     */
     @Bean
     HibernatePropertiesCustomizer tenantResolverCustomizer(
-            RequestTenantResolver resolver,
-            SchemaMultiTenantConnectionProvider connectionProvider) {
+            Optional<RequestTenantResolver> resolver,
+            SchemaMultiTenantConnectionProvider connectionProvider,
+            TenancyProperties tenancyProperties) {
         return props -> {
-            props.put(AvailableSettings.MULTI_TENANT_IDENTIFIER_RESOLVER, resolver);
+            if (!tenancyProperties.isEnabled()) {
+                return;
+            }
+            props.put(AvailableSettings.MULTI_TENANT_IDENTIFIER_RESOLVER, resolver.orElseThrow());
             props.put(AvailableSettings.MULTI_TENANT_CONNECTION_PROVIDER, connectionProvider);
         };
     }
@@ -61,18 +81,27 @@ public class HibernateTenancyConfiguration {
      * <p>
      * When {@code svc.cache.enabled} is false this contributes nothing, leaving Hibernate's
      * second-level cache off and every read going to the database.
+     * <p>
+     * When {@code svc.tenancy.enabled} is false, the tenant-aware region factory is not
+     * registered even if caching itself is on: Hibernate Boot's own plain default region
+     * factory applies instead, giving one shared region per entity rather than one per
+     * (entity, tenant) - the literal "no per-tenant cache region splitting" requirement of the
+     * disabled state. {@link TenantAwareJCacheRegionFactory} itself needs no change for this;
+     * it is purely a bean-selection decision here.
      */
     @Bean
     HibernatePropertiesCustomizer cacheRegionFactoryCustomizer(TenantInfo tenantInfo,
-            CacheProperties cacheProperties) {
+            CacheProperties cacheProperties, TenancyProperties tenancyProperties) {
         return props -> {
             if (!cacheProperties.isEnabled()) {
                 props.put(AvailableSettings.USE_SECOND_LEVEL_CACHE, "false");
                 return;
             }
             props.put(AvailableSettings.USE_SECOND_LEVEL_CACHE, "true");
-            props.put(AvailableSettings.CACHE_REGION_FACTORY,
-                    new TenantAwareJCacheRegionFactory(tenantInfo, cacheProperties.getMode()));
+            if (tenancyProperties.isEnabled()) {
+                props.put(AvailableSettings.CACHE_REGION_FACTORY,
+                        new TenantAwareJCacheRegionFactory(tenantInfo, cacheProperties.getMode()));
+            }
             props.put(ConfigSettings.PROVIDER, cacheProperties.cachingProvider());
             props.put(ConfigSettings.CONFIG_URI, cacheProperties.resolvedConfigUri());
         };
@@ -95,5 +124,32 @@ public class HibernateTenancyConfiguration {
     HibernatePropertiesCustomizer statementInspectorCustomizer() {
         return props -> props.put(AvailableSettings.STATEMENT_INSPECTOR,
                 new QuerySourceStatementInspector());
+    }
+
+    /**
+     * Sets {@code hibernate.search.multi_tenancy.tenant_ids} programmatically from
+     * {@link TenantInfo}, gated by {@code svc.tenancy.enabled} - a static
+     * {@code application.properties} entry cannot do either.
+     * <p>
+     * Two independent reasons this must be conditional, not just derived: (1) Hibernate Search's
+     * own multi-tenancy strategy is separate from Hibernate ORM's - leaving a static tenant-ids
+     * list in place while ORM's multi-tenancy SPI is unregistered (disabled state) makes every
+     * index operation fail with "Invalid tenant identifiers... multi-tenancy is disabled for
+     * this backend", because Hibernate Search then expects to be given NO tenant identifiers at
+     * all, not an empty-but-present list; (2) deriving the list from {@link TenantInfo} instead
+     * of hand-maintaining it in properties closes the separate static-list-sync gap that class's
+     * own javadoc flags (adding a tenant to {@code svc.tenant.ids} now automatically updates this
+     * list too, with no second edit).
+     */
+    @Bean
+    HibernatePropertiesCustomizer searchTenantIdsCustomizer(TenantInfo tenantInfo,
+            TenancyProperties tenancyProperties) {
+        return props -> {
+            if (!tenancyProperties.isEnabled()) {
+                return;
+            }
+            String tenantIds = String.join(",", tenantInfo.getTenants());
+            props.put("hibernate.search.multi_tenancy.tenant_ids", tenantIds);
+        };
     }
 }

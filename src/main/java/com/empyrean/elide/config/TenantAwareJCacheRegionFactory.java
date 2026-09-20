@@ -86,8 +86,8 @@ import java.util.Map;
  * {@code hibernate.search.multi_tenancy.tenant_ids}
  * in {@code application.properties} is likewise a static list. Adding a tenant
  * therefore means
- * updating two places that must stay in sync: {@code svc.tenant.*} and that
- * {@code tenant_ids} list - see {@link #ensureCacheExists} for why
+ * updating two places that must stay in sync: {@code svc.tenant.ids}/{@code svc.tenant.keys}
+ * and that {@code tenant_ids} list - see {@link #ensureCacheExists} for why
  * {@code infinispan.xml} no longer needs a matching per-tenant entry under
  * {@link CacheProperties.Mode#EMBEDDED}.
  *
@@ -115,16 +115,11 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
     }
 
     /**
-     * @return every tenant that can own a cache region: the key-protected tenants
-     *         plus the
-     *         default tenant, which owns no API key but is a real schema
-     *         ({@link TenantInfo#getDefaultTenant()})
+     * @return every tenant that can own a cache region. There is no default/"public" tenant
+     *         any more (see {@link TenantInfo}), so this is simply the configured tenant set.
      */
     private Iterable<String> allTenants() {
-        var tenants = new java.util.LinkedHashSet<String>();
-        tenants.add(tenantInfo.getDefaultTenant());
-        tenants.addAll(tenantInfo.getTenants());
-        return tenants;
+        return tenantInfo.getTenants();
     }
 
     @Override
@@ -150,7 +145,7 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
             cachesByTenant.put(tenantId, getOrCreateCache(regionName, sessionFactory));
         }
 
-        return new TenantAwareStorageAccess(cachesByTenant, tenantInfo.getDefaultTenant());
+        return new TenantAwareStorageAccess(cachesByTenant);
     }
 
     /**
@@ -216,11 +211,10 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
     }
 
     /**
-     * Routes each operation to the calling session's tenant cache, falling back to
-     * the default
-     * tenant when no tenant is in scope (Hibernate's own boot-time and background
-     * work, which
-     * {@code RequestTenantResolver} likewise resolves to the default tenant).
+     * Routes each operation to the calling session's tenant cache. There is no default/"public"
+     * tenant to fall back to any more (see {@link TenantInfo}); an unrecognised tenant identifier
+     * resolves to {@code null} (see {@link #cacheForTenant}) rather than to any real tenant's
+     * cache.
      * <p>
      * Per-lookup tracing logs through the <em>outer</em> class's logger deliberately. Putting
      * {@code @Slf4j} here instead names the logger
@@ -232,11 +226,9 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
     private static final class TenantAwareStorageAccess implements DomainDataStorageAccess {
 
         private final Map<String, Cache<Object, Object>> cachesByTenant;
-        private final String defaultTenant;
 
-        private TenantAwareStorageAccess(Map<String, Cache<Object, Object>> cachesByTenant, String defaultTenant) {
+        private TenantAwareStorageAccess(Map<String, Cache<Object, Object>> cachesByTenant) {
             this.cachesByTenant = cachesByTenant;
-            this.defaultTenant = defaultTenant;
         }
 
         private Cache<Object, Object> cacheFor(SharedSessionContractImplementor session) {
@@ -244,19 +236,15 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
             return cacheForTenant(tenantId);
         }
 
+        /**
+         * @return the tenant's cache, or {@code null} if {@code tenantId} is null or not a
+         *         recognised tenant. Reaching here with an unrecognised tenant means the request
+         *         never touched the database - {@code SchemaTenancyStrategy.validateTenant}
+         *         already fails hard on unknown identifiers before any query runs - so this
+         *         branch is not expected to be hit for real request traffic.
+         */
         private Cache<Object, Object> cacheForTenant(String tenantId) {
-            Cache<Object, Object> cache = tenantId == null ? null : cachesByTenant.get(tenantId);
-            if (cache != null) {
-                return cache;
-            }
-            // An unknown tenant must not silently share the default tenant's cache, but
-            // this
-            // layer is not the right place to reject it either -
-            // SchemaMultiTenantConnectionProvider
-            // already fails hard on unknown identifiers before any query runs, so reaching
-            // here
-            // with an unrecognised tenant means the request never touched the database.
-            return cachesByTenant.get(defaultTenant);
+            return tenantId == null ? null : cachesByTenant.get(tenantId);
         }
 
         @Override
@@ -272,7 +260,7 @@ public class TenantAwareJCacheRegionFactory extends JCacheRegionFactory {
                 log.trace("L2 {} region={} tenant={}",
                         value != null ? "HIT" : "MISS",
                         regionNameFor(session),
-                        session == null ? defaultTenant : session.getTenantIdentifier());
+                        session == null ? "none" : session.getTenantIdentifier());
             }
             return value;
         }

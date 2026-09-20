@@ -1,85 +1,119 @@
 package com.empyrean.elide.tenant;
 
+import jakarta.annotation.PostConstruct;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * Owns the tenant-to-API-key mapping configured under {@code svc.tenant.*} (each property
- * name after the prefix is a tenant name; its value is that tenant's API key), plus the
- * identity of the default tenant that needs no key.
+ * Owns the tenant-to-API-key mapping configured under {@code svc.tenant.ids} /
+ * {@code svc.tenant.keys}: two parallel comma-separated lists, paired by index
+ * ({@code ids[i]} is the tenant whose key is {@code keys[i]}).
  * <p>
- * The default tenant ({@link #getDefaultTenant()}) is deliberately not part of
- * {@code svc.tenant.*} - it is not reachable by any key, only by omitting the
- * {@code X-API-KEY} header.
+ * There is no default/"public" tenant reachable without a key: every request must present an
+ * {@code X-API-KEY} matching one of the tenants configured here, or it is rejected - see
+ * {@link TenantHeaderFilter}. The tenants listed here are the only valid resolution targets.
  */
 @Component
-@ConfigurationProperties(prefix = "svc")
+@ConfigurationProperties(prefix = "svc.tenant")
 public class TenantInfo {
 
-    private static final String DEFAULT_TENANT = "public";
+    private List<String> ids = new ArrayList<>();
+    private List<String> keys = new ArrayList<>();
 
-    /** Bound from {@code svc.tenant.<name>=<key>}. */
-    private Map<String, String> tenant = new LinkedHashMap<>();
-
+    private Map<String, String> tenantToKey;
     private Map<String, String> keyToTenant;
 
-    public void setTenant(Map<String, String> tenant) {
-        this.tenant = tenant;
-        this.keyToTenant = null;
+    public void setIds(List<String> ids) {
+        this.ids = ids;
     }
 
-    public Map<String, String> getTenant() {
-        return tenant;
+    public List<String> getIds() {
+        return ids;
+    }
+
+    public void setKeys(List<String> keys) {
+        this.keys = keys;
+    }
+
+    public List<String> getKeys() {
+        return keys;
     }
 
     /**
-     * @return the names of every configured, key-protected tenant (excludes the default tenant)
+     * Fails application startup if {@code svc.tenant.ids} and {@code svc.tenant.keys} are not
+     * the same length, or either list contains a duplicate entry. A length mismatch means at
+     * least one id or key has no pair; a duplicate id or key would make the id&lt;-&gt;key mapping
+     * ambiguous. Runs once both lists are bound (Spring calls setters before
+     * {@code @PostConstruct}) and builds the derived lookup maps eagerly, so a later lazy-build
+     * race is impossible.
+     */
+    @PostConstruct
+    void validate() {
+        if (ids.size() != keys.size()) {
+            throw new IllegalStateException(
+                    "svc.tenant.ids (" + ids.size() + " entries) and svc.tenant.keys ("
+                            + keys.size() + " entries) must have the same length");
+        }
+        requireNoDuplicates("svc.tenant.ids", ids);
+        requireNoDuplicates("svc.tenant.keys", keys);
+
+        Map<String, String> byTenant = new LinkedHashMap<>();
+        Map<String, String> byKey = new HashMap<>();
+        for (int i = 0; i < ids.size(); i++) {
+            byTenant.put(ids.get(i), keys.get(i));
+            byKey.put(keys.get(i), ids.get(i));
+        }
+        this.tenantToKey = byTenant;
+        this.keyToTenant = byKey;
+    }
+
+    private static void requireNoDuplicates(String propertyName, List<String> values) {
+        Set<String> seen = new HashSet<>();
+        for (String value : values) {
+            if (!seen.add(value)) {
+                throw new IllegalStateException(
+                        propertyName + " contains a duplicate entry: " + value);
+            }
+        }
+    }
+
+    /**
+     * @return the names of every configured tenant
      */
     public Set<String> getTenants() {
-        return Collections.unmodifiableSet(tenant.keySet());
+        return Collections.unmodifiableSet(tenantToKey.keySet());
     }
 
     /**
-     * @return the number of configured, key-protected tenants (excludes the default tenant)
+     * @return the number of configured tenants
      */
     public int getTenantCount() {
-        return tenant.size();
+        return tenantToKey.size();
     }
 
     /**
      * @return an unmodifiable view of the tenant name to API key mapping
      */
     public Map<String, String> getTenantToKeyMapping() {
-        return Collections.unmodifiableMap(tenant);
+        return Collections.unmodifiableMap(tenantToKey);
     }
 
     /**
-     * Looks up which tenant a given API key belongs to. The reverse (key-to-tenant) index is
-     * built lazily on first use and cached.
+     * Looks up which tenant a given API key belongs to.
      *
      * @param apiKey the API key presented by the caller
      * @return the matching tenant name, or {@code null} if the key is not configured
      */
     public String getTenantForKey(String apiKey) {
-        if (keyToTenant == null) {
-            Map<String, String> inverted = new HashMap<>();
-            tenant.forEach((name, key) -> inverted.put(key, name));
-            keyToTenant = inverted;
-        }
         return keyToTenant.get(apiKey);
-    }
-
-    /**
-     * @return the name of the tenant used when no API key is presented; this tenant requires
-     * no key and is not present in {@link #getTenantToKeyMapping()}
-     */
-    public String getDefaultTenant() {
-        return DEFAULT_TENANT;
     }
 }

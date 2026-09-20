@@ -29,14 +29,6 @@ class MultiTenancyTest {
     }
 
     @Test
-    void createsAndListsNoteUnderPublicTenant() {
-        String body = "public note " + UUID.randomUUID();
-        createNote(null, body, "public@example.com");
-
-        listNotes(null).body("data.attributes.body", hasItem(body));
-    }
-
-    @Test
     void tenantsAreFullyIsolatedFromEachOther() {
         String bodyA = "tenant a note " + UUID.randomUUID();
         String bodyB = "tenant b note " + UUID.randomUUID();
@@ -53,8 +45,23 @@ class MultiTenancyTest {
     }
 
     @Test
-    void missingApiKeyServesPublicTenant() {
-        listNotes(null);
+    void missingApiKeyIsRejected() {
+        given()
+                .accept(JSON_API)
+                .get(NOTES_PATH)
+                .then()
+                .statusCode(401)
+                .body("errors[0].detail", org.hamcrest.Matchers.containsString("Missing"));
+    }
+
+    @Test
+    void blankApiKeyIsRejected() {
+        given()
+                .header("X-API-KEY", "")
+                .accept(JSON_API)
+                .get(NOTES_PATH)
+                .then()
+                .statusCode(401);
     }
 
     @Test
@@ -64,19 +71,28 @@ class MultiTenancyTest {
                 .accept(JSON_API)
                 .get(NOTES_PATH)
                 .then()
-                .statusCode(401);
+                .statusCode(401)
+                .body("errors[0].detail", org.hamcrest.Matchers.containsString("Unknown"));
     }
 
     /**
      * Servlet threads are pooled. A request that set a tenant must not leave it visible to the
-     * next request served by the same thread - see TenantHeaderFilter's finally block.
+     * next request served by the same thread - see TenantHeaderFilter's finally block. A
+     * subsequent unkeyed request is itself rejected (there is no default tenant to leak into),
+     * so the leak check is: the keyed note must not surface via the earlier tenant's key either.
      */
     @Test
     void tenantDoesNotLeakToASubsequentRequestOnTheSameThread() {
         String leaked = "leak check " + UUID.randomUUID();
         createNote("key-a", leaked, "a@example.com");
 
-        listNotes(null).body("data.attributes.body", not(hasItem(leaked)));
+        given()
+                .accept(JSON_API)
+                .get(NOTES_PATH)
+                .then()
+                .statusCode(401);
+
+        listNotes("key-b").body("data.attributes.body", not(hasItem(leaked)));
     }
 
     private ValidatableResponse listNotes(String apiKey) {

@@ -54,16 +54,20 @@ public class SearchProperties {
     }
 
     /**
-     * Whether full-text search is switched on at all. When false, {@code Note} is served by the
-     * plain JPA store instead of {@code SearchDataStore}. {@code infix}/{@code prefix} filters on
-     * {@code body} keep working either way - {@code infix}/{@code prefix} are operators Elide's
-     * own predicate engine understands generically, not something exclusive to
-     * {@code SearchDataStore} - but every such query now falls through to a SQL {@code LIKE}
-     * predicate against the database instead of being served from the index. See
+     * Whether full-text search is switched on at all. Off by default - a deployment that never
+     * sets {@code svc.search.enabled} gets no search index, needing no Lucene/Elasticsearch
+     * infrastructure at all. When false, {@code Note} is served by the plain JPA store instead of
+     * {@code SearchDataStore}. {@code infix}/{@code prefix} filters on {@code body} keep working
+     * either way - {@code infix}/{@code prefix} are operators Elide's own predicate engine
+     * understands generically, not something exclusive to {@code SearchDataStore} - but every
+     * such query now falls through to a SQL {@code LIKE} predicate against the database instead
+     * of being served from the index. See
      * {@link com.empyrean.elide.observability.QuerySourceAwareSearchDataStore} for how that
      * database-served path is distinguished from an index-served one in the query-source log.
+     * This application's own default profile opts back in explicitly (see
+     * {@code application.properties}), since the sample demonstrates the search path.
      */
-    private boolean enabled = true;
+    private boolean enabled = false;
 
     /** Which backend indexes {@code Note.body}. Defaults to {@link Mode#LUCENE}. */
     private Mode mode = Mode.LUCENE;

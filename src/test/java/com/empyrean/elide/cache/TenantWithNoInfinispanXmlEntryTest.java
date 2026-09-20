@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @see com.empyrean.elide.config.TenantAwareJCacheRegionFactory
  */
-@SpringBootTest(properties = "spring.jpa.properties.hibernate.search.multi_tenancy.tenant_ids=public,tenant_a,tenant_b,tenant_c")
+@SpringBootTest(properties = "spring.jpa.properties.hibernate.search.multi_tenancy.tenant_ids=tenant_a,tenant_b,tenant_c")
 class TenantWithNoInfinispanXmlEntryTest {
 
     private static final String NOTE_REGION = Note.class.getName();
@@ -45,8 +45,10 @@ class TenantWithNoInfinispanXmlEntryTest {
     @DynamicPropertySource
     static void addTenantWithNoInfinispanXmlEntry(DynamicPropertyRegistry registry) {
         // No corresponding edit to infinispan.xml - that absence is exactly what this test
-        // covers.
-        registry.add("svc.tenant.tenant_c", () -> "key-c");
+        // covers. Overrides the base ids/keys lists wholesale (they're bound as one property
+        // each, not merged per-entry), so tenant_c must be listed alongside the base tenants.
+        registry.add("svc.tenant.ids", () -> "tenant_a,tenant_b,tenant_c");
+        registry.add("svc.tenant.keys", () -> "key-a,key-b,key-c");
     }
 
     /**

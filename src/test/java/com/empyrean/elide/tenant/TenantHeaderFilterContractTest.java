@@ -10,7 +10,6 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 /**
@@ -98,41 +97,31 @@ class TenantHeaderFilterContractTest {
     }
 
     /**
-     * A 200 alone does not prove the default tenant was selected - it would also pass if the
-     * request were served from some other schema. Assert the tenant identity observably: a note
-     * created WITH a key must not be visible to the keyless request.
+     * There is no default/"public" tenant any more - a request with no key at all must be
+     * rejected exactly like one with an unrecognised key, not silently served from some
+     * implicit default schema.
      */
     @Test
-    void missingApiKeyActuallySelectsThePublicTenant() {
-        String keyed = "public-selection probe " + java.util.UUID.randomUUID();
-        given()
-                .header("X-API-KEY", "key-a")
-                .contentType(JSON_API)
-                .accept(JSON_API)
-                .body("""
-                        {"data":{"type":"notes","attributes":{"body":"%s","email":"a@example.com"}}}"""
-                        .formatted(keyed))
-                .post("/api/v1/notes")
-                .then()
-                .statusCode(201);
-
-        String publicOnly = "public-selection own " + java.util.UUID.randomUUID();
-        given()
-                .contentType(JSON_API)
-                .accept(JSON_API)
-                .body("""
-                        {"data":{"type":"notes","attributes":{"body":"%s","email":"p@example.com"}}}"""
-                        .formatted(publicOnly))
-                .post("/api/v1/notes")
-                .then()
-                .statusCode(201);
-
+    void missingApiKeyIsRejectedWithTheMissingKeyContract() {
         given()
                 .accept(JSON_API)
                 .get("/api/v1/notes")
                 .then()
-                .statusCode(200)
-                .body("data.attributes.body", org.hamcrest.Matchers.hasItem(publicOnly))
-                .body("data.attributes.body", not(org.hamcrest.Matchers.hasItem(keyed)));
+                .statusCode(401)
+                .contentType(JSON_API)
+                .body("errors[0].status", equalTo("401"))
+                .body("errors[0].title", equalTo("Unauthorized"))
+                .body("errors[0].detail", equalTo("Missing X-API-KEY"));
+    }
+
+    @Test
+    void blankApiKeyIsRejectedWithTheMissingKeyContract() {
+        given()
+                .header("X-API-KEY", "")
+                .accept(JSON_API)
+                .get("/api/v1/notes")
+                .then()
+                .statusCode(401)
+                .body("errors[0].detail", equalTo("Missing X-API-KEY"));
     }
 }

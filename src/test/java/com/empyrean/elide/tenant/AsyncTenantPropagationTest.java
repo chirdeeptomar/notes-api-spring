@@ -128,14 +128,13 @@ class AsyncTenantPropagationTest {
                 "async worker thread must see the tenant the X-API-KEY maps to");
     }
 
-    /** The default (no key) tenant must also propagate, not just keyed tenants. */
+    /** There is no default/"public" tenant any more - a keyless request must be rejected. */
     @Test
-    void defaultTenantIsVisibleOnTheAsyncWorkerThread() {
+    void requestWithNoKeyIsRejectedBeforeReachingTheAsyncWorker() {
         RestAssured.given()
                 .get("/api/v1/__probe/async-tenant")
                 .then()
-                .statusCode(200)
-                .body("innerTenant", org.hamcrest.Matchers.equalTo("public"));
+                .statusCode(401);
     }
 
     /**

@@ -3,7 +3,6 @@ package com.empyrean.elide.config;
 import com.empyrean.elide.datastore.TenantAwareDataSource;
 import com.empyrean.elide.observability.QuerySourceAwareSearchDataStore;
 import com.empyrean.elide.tenant.TenancyStrategy;
-import com.empyrean.elide.tenant.TenantInfo;
 import com.yahoo.elide.core.datastore.DataStore;
 import com.yahoo.elide.datastores.jpa.JpaDataStore;
 import com.yahoo.elide.datastores.search.SearchDataStore;
@@ -133,11 +132,20 @@ public class ElideStoreConfiguration {
      * {@code defaultDataSource}, why it is not an autowire candidate, and why it resolves the raw
      * pooled {@code DataSource} lazily, by name, through {@link BeanFactory} rather than taking
      * one as a constructor/method parameter.
+     * <p>
+     * When {@code svc.tenancy.enabled=false}, returns the raw pooled {@code DataSource} bean
+     * directly - resolved the same lazy, by-name way - instead of constructing a
+     * {@link TenantAwareDataSource} wrapper: the literal "plain undecorated DataSource"
+     * requirement of the disabled state, under the same bean name and
+     * {@code autowireCandidate = false} shape either way.
      */
     @Bean(name = "defaultDataSource", autowireCandidate = false)
-    public DataSource tenantAwareDataSource(BeanFactory beanFactory, TenantInfo tenantInfo,
-            TenancyStrategy tenancyStrategy) {
-        return new TenantAwareDataSource(beanFactory, tenantInfo, tenancyStrategy);
+    public DataSource tenantAwareDataSource(BeanFactory beanFactory, TenancyStrategy tenancyStrategy,
+            TenancyProperties tenancyProperties) {
+        if (!tenancyProperties.isEnabled()) {
+            return beanFactory.getBean("dataSource", DataSource.class);
+        }
+        return new TenantAwareDataSource(beanFactory, tenancyStrategy);
     }
 
     private void replaceJpaStoresWithSearchStores(java.util.List<DataStore> dataStores,

@@ -2,7 +2,6 @@ package com.empyrean.elide.config;
 
 import com.empyrean.elide.datastore.TenantAwareDataSource;
 import com.empyrean.elide.tenant.TenancyStrategy;
-import com.empyrean.elide.tenant.TenantInfo;
 import com.yahoo.elide.core.dictionary.Injector;
 import com.yahoo.elide.core.utils.ClassScanner;
 import com.yahoo.elide.datastores.aggregation.DefaultQueryValidator;
@@ -19,6 +18,7 @@ import org.springframework.beans.factory.BeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import javax.sql.DataSource;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Optional;
@@ -59,14 +59,20 @@ import java.util.Optional;
 public class AnalyticsQueryEngineConfiguration {
 
     @Bean
-    public QueryEngine queryEngine(BeanFactory beanFactory, TenantInfo tenantInfo,
-            TenancyStrategy tenancyStrategy, Optional<DynamicConfiguration> dynamicConfiguration,
+    public QueryEngine queryEngine(BeanFactory beanFactory, TenancyStrategy tenancyStrategy,
+            TenancyProperties tenancyProperties, Optional<DynamicConfiguration> dynamicConfiguration,
             ElideConfigProperties settings, ClassScanner scanner, Injector injector) {
 
         boolean metadataEnabled = settings.getAggregationStore().getMetadataStore().isEnabled();
 
+        // When tenancy is disabled, use the raw pooled DataSource directly - the same "plain
+        // undecorated DataSource" fallback ElideStoreConfiguration.tenantAwareDataSource uses at
+        // its own, independent TenantAwareDataSource construction site.
+        DataSource analyticsDataSource = tenancyProperties.isEnabled()
+                ? new TenantAwareDataSource(beanFactory, tenancyStrategy)
+                : beanFactory.getBean("dataSource", DataSource.class);
         ConnectionDetails connectionDetails = new ConnectionDetails(
-                new TenantAwareDataSource(beanFactory, tenantInfo, tenancyStrategy),
+                analyticsDataSource,
                 SQLDialectFactory.getDialect(settings.getAggregationStore().getDefaultDialect()));
 
         MetaDataStore metaDataStore = dynamicConfiguration

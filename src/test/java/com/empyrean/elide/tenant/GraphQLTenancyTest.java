@@ -13,7 +13,7 @@ import static org.hamcrest.Matchers.not;
 
 /**
  * Confirms {@link TenantHeaderFilter} resolves tenants for GraphQL requests the same way it
- * does for JSON:API ones: without this, every GraphQL request silently served the public
+ * does for JSON:API ones: without this, every GraphQL request would silently serve the wrong
  * tenant's data and an unrecognized {@code X-API-KEY} was never rejected.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)

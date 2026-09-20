@@ -15,11 +15,10 @@ import org.springframework.stereotype.Component;
 /**
  * Seeds each tenant's schema with mock {@link Note} rows at startup, for local development only.
  * <p>
- * Ordered after {@link TenantSchemaInitializer} so the key-protected tenant schemas exist before
- * anything is written to them. Each tenant (the default tenant plus every entry from
- * {@link TenantInfo#getTenants()}) is seeded through an explicitly tenant-scoped Hibernate
- * {@link Session}, since there is no in-flight HTTP request for {@link RequestTenantResolver} to
- * resolve a tenant from at startup time.
+ * Ordered after {@link TenantSchemaInitializer} so the tenant schemas exist before anything is
+ * written to them. Every entry from {@link TenantInfo#getTenants()} is seeded through an
+ * explicitly tenant-scoped Hibernate {@link Session}, since there is no in-flight HTTP request
+ * for {@link RequestTenantResolver} to resolve a tenant from at startup time.
  */
 @Component
 @Order(2)
@@ -40,7 +39,6 @@ public class MockNoteSeeder implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         Faker faker = new Faker();
-        seedTenant(tenantInfo.getDefaultTenant(), faker);
         for (String tenantId : tenantInfo.getTenants()) {
             seedTenant(tenantId, faker);
         }

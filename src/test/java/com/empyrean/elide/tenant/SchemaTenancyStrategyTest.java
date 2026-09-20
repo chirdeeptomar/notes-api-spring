@@ -8,8 +8,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -35,9 +34,9 @@ class SchemaTenancyStrategyTest {
         }
 
         TenantInfo tenantInfo = new TenantInfo();
-        Map<String, String> tenants = new LinkedHashMap<>();
-        tenants.put("tenant_a", "key-a");
-        tenantInfo.setTenant(tenants);
+        tenantInfo.setIds(List.of("tenant_a"));
+        tenantInfo.setKeys(List.of("key-a"));
+        tenantInfo.validate();
 
         strategy = new SchemaTenancyStrategy(tenantInfo);
     }
@@ -45,12 +44,6 @@ class SchemaTenancyStrategyTest {
     @AfterEach
     void tearDown() throws SQLException {
         connection.close();
-    }
-
-    @Test
-    void validateTenantAcceptsTheDefaultTenant() throws SQLException {
-        strategy.validateTenant("public");
-        // no exception
     }
 
     @Test
@@ -67,17 +60,38 @@ class SchemaTenancyStrategyTest {
     }
 
     @Test
+    void validateTenantAcceptsThePhysicalDefaultSchemaConstant() throws SQLException {
+        // Not a tenant, but RequestTenantResolver's boot-time fallback (Hibernate's own
+        // non-request-scoped work, e.g. the mass-indexer) resolves to exactly this identifier,
+        // so it must pass validation - see SchemaTenancyStrategy.PHYSICAL_DEFAULT_SCHEMA's javadoc.
+        strategy.validateTenant(SchemaTenancyStrategy.PHYSICAL_DEFAULT_SCHEMA);
+        // no exception
+    }
+
+    @Test
+    void validateTenantRejectsAnythingElseNotConfigured() {
+        // Anything that is neither a configured tenant nor the physical default schema constant
+        // must still be rejected - the one exception above does not widen the accepted set to
+        // "anything resembling public".
+        assertThatThrownBy(() -> strategy.validateTenant("PUBLIC"))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("Unknown tenant");
+    }
+
+    @Test
     void scopeConnectionSetsTheConnectionSchema() throws SQLException {
         strategy.scopeConnection(connection, "tenant_a");
         assertThat(connection.getSchema()).isEqualToIgnoringCase("tenant_a");
     }
 
     @Test
-    void unscopeConnectionResetsToTheDefaultTenantSchema() throws SQLException {
+    void unscopeConnectionResetsToThePhysicalDefaultSchema() throws SQLException {
         strategy.scopeConnection(connection, "tenant_a");
         assertThat(connection.getSchema()).isEqualToIgnoringCase("tenant_a");
 
         strategy.unscopeConnection(connection);
+        // Resets to H2's own physical default schema, not to any tenant - there is no
+        // default/"public" tenant any more.
         assertThat(connection.getSchema()).isEqualToIgnoringCase("public");
     }
 }

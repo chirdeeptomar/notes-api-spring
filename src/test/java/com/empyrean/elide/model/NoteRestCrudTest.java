@@ -43,6 +43,7 @@ class NoteRestCrudTest {
         String id = createNote(body, "fetch@example.com");
 
         given()
+                .header("X-API-KEY", "key-a")
                 .accept(JSON_API)
                 .get(NOTES_PATH + "/" + id)
                 .then()
@@ -55,6 +56,7 @@ class NoteRestCrudTest {
     @Test
     void fetchingUnknownIdReturnsNotFound() {
         given()
+                .header("X-API-KEY", "key-a")
                 .accept(JSON_API)
                 .get(NOTES_PATH + "/" + UUID.randomUUID())
                 .then()
@@ -66,6 +68,7 @@ class NoteRestCrudTest {
         String id = createNote("original body", "original@example.com");
 
         given()
+                .header("X-API-KEY", "key-a")
                 .contentType(JSON_API)
                 .accept(JSON_API)
                 .body(datum(resource(
@@ -77,6 +80,7 @@ class NoteRestCrudTest {
                 .statusCode(204);
 
         given()
+                .header("X-API-KEY", "key-a")
                 .accept(JSON_API)
                 .get(NOTES_PATH + "/" + id)
                 .then()
@@ -90,11 +94,13 @@ class NoteRestCrudTest {
         String id = createNote("note to delete", "delete@example.com");
 
         given()
+                .header("X-API-KEY", "key-a")
                 .delete(NOTES_PATH + "/" + id)
                 .then()
                 .statusCode(204);
 
         given()
+                .header("X-API-KEY", "key-a")
                 .accept(JSON_API)
                 .get(NOTES_PATH + "/" + id)
                 .then()
@@ -103,6 +109,7 @@ class NoteRestCrudTest {
 
     private String createNote(String body, String email) {
         ValidatableResponse response = given()
+                .header("X-API-KEY", "key-a")
                 .contentType(JSON_API)
                 .accept(JSON_API)
                 .body(datum(resource(

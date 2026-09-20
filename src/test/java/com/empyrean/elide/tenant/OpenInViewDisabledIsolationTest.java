@@ -26,7 +26,8 @@ import static org.hamcrest.Matchers.not;
  * routine change Spring Boot itself nags about at startup) removes that accident: the Session
  * is opened lazily on the {@code task-*} worker, where an unpropagated
  * {@link TenantContext} reads {@code null} and {@link RequestTenantResolver} silently answers
- * {@code public} - routing every tenant's traffic into one schema with no error.
+ * with an arbitrary configured tenant - routing every tenant's traffic into one schema with no
+ * error.
  * <p>
  * This test pins that isolation survives without the crutch.
  *
@@ -66,11 +67,12 @@ class OpenInViewDisabledIsolationTest {
     }
 
     @Test
-    void publicTenantStaysSeparateWithoutOpenInView() {
-        String keyed = "oiv-off keyed " + UUID.randomUUID();
-        createNote("key-a", keyed, "a@example.com");
-
-        listNotes(null).body("data.attributes.body", not(hasItem(keyed)));
+    void missingApiKeyIsRejectedWithoutOpenInView() {
+        given()
+                .accept(JSON_API)
+                .get(NOTES_PATH)
+                .then()
+                .statusCode(401);
     }
 
     private ValidatableResponse listNotes(String apiKey) {

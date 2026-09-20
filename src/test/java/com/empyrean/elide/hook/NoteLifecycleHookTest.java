@@ -43,6 +43,7 @@ class NoteLifecycleHookTest {
         String id = createNote("  spaced   out  ", "normalize@example.com");
 
         given()
+                .header("X-API-KEY", "key-a")
                 .accept(JSON_API)
                 .get(NOTES_PATH + "/" + id)
                 .then()
@@ -55,6 +56,7 @@ class NoteLifecycleHookTest {
         String id = createNote("original", "normalize@example.com");
 
         given()
+                .header("X-API-KEY", "key-a")
                 .contentType(JSON_API)
                 .accept(JSON_API)
                 .body("""
@@ -65,6 +67,7 @@ class NoteLifecycleHookTest {
                 .statusCode(204);
 
         given()
+                .header("X-API-KEY", "key-a")
                 .accept(JSON_API)
                 .get(NOTES_PATH + "/" + id)
                 .then()
@@ -94,6 +97,7 @@ class NoteLifecycleHookTest {
         recorder.clear();
 
         given()
+                .header("X-API-KEY", "key-a")
                 .contentType(JSON_API)
                 .accept(JSON_API)
                 .body("""
@@ -116,6 +120,7 @@ class NoteLifecycleHookTest {
 
     private String createNote(String body, String email) {
         return given()
+                .header("X-API-KEY", "key-a")
                 .contentType(JSON_API)
                 .accept(JSON_API)
                 .body("""

@@ -57,10 +57,14 @@ class TenantSchemaTest {
     }
 
     @Test
-    void resolverFallsBackToDefaultTenantOutsideARequest() {
+    void resolverFallsBackToThePhysicalDefaultSchemaOutsideARequest() {
         TenantContext.clear();
         RequestTenantResolver resolver = new RequestTenantResolver(tenantInfo);
-        assertThat(resolver.resolveCurrentTenantIdentifier()).isEqualTo("public");
+        // No default/"public" tenant any more, but Hibernate's own boot-time work (e.g. the
+        // mass-indexer, which runs before any tenant schema is provisioned) still needs a
+        // schema that already exists - see RequestTenantResolver's javadoc.
+        assertThat(resolver.resolveCurrentTenantIdentifier())
+                .isEqualTo(SchemaTenancyStrategy.PHYSICAL_DEFAULT_SCHEMA);
     }
 
     @Test
