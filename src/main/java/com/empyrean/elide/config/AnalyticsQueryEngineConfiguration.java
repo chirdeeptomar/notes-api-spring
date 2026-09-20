@@ -1,6 +1,7 @@
 package com.empyrean.elide.config;
 
 import com.empyrean.elide.datastore.TenantAwareDataSource;
+import com.empyrean.elide.tenant.TenancyStrategy;
 import com.empyrean.elide.tenant.TenantInfo;
 import com.yahoo.elide.core.dictionary.Injector;
 import com.yahoo.elide.core.utils.ClassScanner;
@@ -59,13 +60,13 @@ public class AnalyticsQueryEngineConfiguration {
 
     @Bean
     public QueryEngine queryEngine(BeanFactory beanFactory, TenantInfo tenantInfo,
-            Optional<DynamicConfiguration> dynamicConfiguration, ElideConfigProperties settings,
-            ClassScanner scanner, Injector injector) {
+            TenancyStrategy tenancyStrategy, Optional<DynamicConfiguration> dynamicConfiguration,
+            ElideConfigProperties settings, ClassScanner scanner, Injector injector) {
 
         boolean metadataEnabled = settings.getAggregationStore().getMetadataStore().isEnabled();
 
         ConnectionDetails connectionDetails = new ConnectionDetails(
-                new TenantAwareDataSource(beanFactory, tenantInfo),
+                new TenantAwareDataSource(beanFactory, tenantInfo, tenancyStrategy),
                 SQLDialectFactory.getDialect(settings.getAggregationStore().getDefaultDialect()));
 
         MetaDataStore metaDataStore = dynamicConfiguration

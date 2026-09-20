@@ -2,6 +2,7 @@ package com.empyrean.elide.config;
 
 import com.empyrean.elide.datastore.TenantAwareDataSource;
 import com.empyrean.elide.observability.QuerySourceAwareSearchDataStore;
+import com.empyrean.elide.tenant.TenancyStrategy;
 import com.empyrean.elide.tenant.TenantInfo;
 import com.yahoo.elide.core.datastore.DataStore;
 import com.yahoo.elide.datastores.jpa.JpaDataStore;
@@ -134,8 +135,9 @@ public class ElideStoreConfiguration {
      * one as a constructor/method parameter.
      */
     @Bean(name = "defaultDataSource", autowireCandidate = false)
-    public DataSource tenantAwareDataSource(BeanFactory beanFactory, TenantInfo tenantInfo) {
-        return new TenantAwareDataSource(beanFactory, tenantInfo);
+    public DataSource tenantAwareDataSource(BeanFactory beanFactory, TenantInfo tenantInfo,
+            TenancyStrategy tenancyStrategy) {
+        return new TenantAwareDataSource(beanFactory, tenantInfo, tenancyStrategy);
     }
 
     private void replaceJpaStoresWithSearchStores(java.util.List<DataStore> dataStores,

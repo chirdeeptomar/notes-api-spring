@@ -1,5 +1,6 @@
 package com.empyrean.elide.datastore;
 
+import com.empyrean.elide.tenant.TenancyStrategy;
 import com.empyrean.elide.tenant.TenantContext;
 import com.empyrean.elide.tenant.TenantInfo;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +23,15 @@ import java.util.logging.Logger;
  * participate in {@code RequestTenantResolver} on its own — this class is what makes analytic
  * queries (e.g. {@code noteStats}) honor the {@code X-API-KEY} tenant instead of always reading
  * one fixed schema.
+ * <p>
+ * Scoping itself is delegated to the injected {@link TenancyStrategy} - the same one
+ * {@code SchemaMultiTenantConnectionProvider} uses for Hibernate ORM's path - so both call sites
+ * agree on how a tenant identifier becomes an actual schema. This class deliberately does
+ * <b>not</b> call {@link TenancyStrategy#validateTenant} or
+ * {@link TenancyStrategy#unscopeConnection}, unlike {@code SchemaMultiTenantConnectionProvider}:
+ * it never validates an unknown tenant identifier, and it never explicitly resets a connection's
+ * scope before returning it to the caller. This is an existing asymmetry between the two call
+ * sites, preserved here as-is rather than unified - see {@link TenancyStrategy}'s javadoc.
  */
 @Slf4j
 public class TenantAwareDataSource implements DataSource {
@@ -31,11 +41,14 @@ public class TenantAwareDataSource implements DataSource {
 
     private final BeanFactory beanFactory;
     private final TenantInfo tenantInfo;
+    private final TenancyStrategy tenancyStrategy;
     private volatile DataSource delegate;
 
-    public TenantAwareDataSource(BeanFactory beanFactory, TenantInfo tenantInfo) {
+    public TenantAwareDataSource(BeanFactory beanFactory, TenantInfo tenantInfo,
+            TenancyStrategy tenancyStrategy) {
         this.beanFactory = beanFactory;
         this.tenantInfo = tenantInfo;
+        this.tenancyStrategy = tenancyStrategy;
     }
 
     /**
@@ -69,7 +82,7 @@ public class TenantAwareDataSource implements DataSource {
     }
 
     private Connection withTenantSchema(Connection connection) throws SQLException {
-        connection.setSchema(resolveTenantId());
+        tenancyStrategy.scopeConnection(connection, resolveTenantId());
         return connection;
     }
 
